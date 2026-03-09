@@ -231,6 +231,12 @@ OPENAI_TOOL_DECLARATIONS = [
 ]
 
 
+# 追蹤 agent 是否在 agentic loop 中已呼叫過 send_message 工具
+# 每次 Docker 啟動都是全新 process，此 flag 只有一次生命週期
+# 用途：避免 host 讀取 result 欄位時重複發送（雙重訊息 bug）
+_messages_sent_via_tool: list = []
+
+
 def execute_tool(name: str, args: dict, chat_jid: str) -> str:
     """
     根據 Gemini 回傳的 function call 名稱，分派到對應的 tool 實作。
@@ -245,6 +251,7 @@ def execute_tool(name: str, args: dict, chat_jid: str) -> str:
     elif name == "Edit":
         return tool_edit(args["file_path"], args["old_string"], args["new_string"])
     elif name == "mcp__evoclaw__send_message":
+        _messages_sent_via_tool.append(True)  # 標記：已透過工具發送，host 不需再發 result
         return tool_send_message(chat_jid, args["text"], args.get("sender"))
     elif name == "mcp__evoclaw__schedule_task":
         return tool_schedule_task(
@@ -504,7 +511,11 @@ def main():
             result = run_agent_openai(openai_client, system_instruction, prompt, chat_jid, _model)
         else:
             result = run_agent(client, system_instruction, prompt, chat_jid, assistant_name)
-        emit({"status": "success", "result": result, "newSessionId": f"evoclaw-{int(time.time())}"})
+        # 若 agent 已透過 mcp__evoclaw__send_message 工具主動發送訊息，
+        # 則清空 result 欄位，避免 host 的 container_runner 再次發送（雙重訊息 + 超長訊息 bug）
+        # 若 agent 沒有呼叫工具（純文字回覆），則由 host 負責發送 result
+        emit_result = "" if _messages_sent_via_tool else result
+        emit({"status": "success", "result": emit_result, "newSessionId": f"evoclaw-{int(time.time())}"})
     except Exception as e:
         emit({"status": "error", "result": None, "error": str(e)})
 
