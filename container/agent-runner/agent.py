@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-EvoClaw Agent Runner (Python + Gemini / OpenAI-compatible / Claude)
+EvoClaw Agent Runner (Python + Gemini / OpenAI-compatible)
 Reads ContainerInput JSON from stdin, runs agentic loop, outputs to stdout.
-Supports Gemini (default), Claude (Anthropic), or any OpenAI-compatible API.
+Supports Gemini (default) or any OpenAI-compatible API (NVIDIA NIM, OpenAI, Groq, etc.)
 """
 
 import json
@@ -20,12 +20,6 @@ try:
     _OPENAI_AVAILABLE = True
 except ImportError:
     _OPENAI_AVAILABLE = False
-
-try:
-    import anthropic as _anthropic
-    _CLAUDE_AVAILABLE = True
-except ImportError:
-    _CLAUDE_AVAILABLE = False
 
 # container 輸出的邊界標記，host 用這兩個字串從 stdout 截取 JSON 結果
 # 必須與 container_runner.py 中定義的常數完全一致
@@ -243,6 +237,68 @@ OPENAI_TOOL_DECLARATIONS = [
 _messages_sent_via_tool: list = []
 
 
+# Claude (Anthropic) tool declarations
+CLAUDE_TOOL_DECLARATIONS = [
+    {"name": "Bash", "description": "Execute a bash command in /workspace/group.", "input_schema": {"type": "object", "properties": {"command": {"type": "string", "description": "The bash command to run"}}, "required": ["command"]}},
+    {"name": "Read", "description": "Read a file from the filesystem.", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string", "description": "Absolute path to the file"}}, "required": ["file_path"]}},
+    {"name": "Write", "description": "Write content to a file.", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string"}, "content": {"type": "string"}}, "required": ["file_path", "content"]}},
+    {"name": "Edit", "description": "Find and replace a string in a file.", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}, "required": ["file_path", "old_string", "new_string"]}},
+    {"name": "mcp__evoclaw__send_message", "description": "Send a message to the user.", "input_schema": {"type": "object", "properties": {"text": {"type": "string"}, "sender": {"type": "string"}}, "required": ["text"]}},
+    {"name": "mcp__evoclaw__schedule_task", "description": "Schedule a task.", "input_schema": {"type": "object", "properties": {"prompt": {"type": "string"}, "schedule_type": {"type": "string"}, "schedule_value": {"type": "string"}, "context_mode": {"type": "string"}}, "required": ["prompt", "schedule_type", "schedule_value"]}},
+]
+
+
+def run_agent_claude(client, model: str, system_instruction: str, user_message: str, chat_jid: str) -> str:
+    """
+    Anthropic Claude agentic loop.
+    Uses Claude's tool use API format.
+    """
+    messages = [{"role": "user", "content": user_message}]
+    MAX_ITER = 30
+    final_response = ""
+
+    for _ in range(MAX_ITER):
+        response = client.messages.create(
+            model=model,
+            max_tokens=4096,
+            system=system_instruction,
+            tools=CLAUDE_TOOL_DECLARATIONS,
+            messages=messages,
+        )
+
+        # Add assistant response to history
+        messages.append({"role": "assistant", "content": response.content})
+
+        if response.stop_reason == "end_turn":
+            # Collect all text blocks
+            final_response = " ".join(
+                block.text for block in response.content
+                if hasattr(block, "text")
+            )
+            break
+
+        if response.stop_reason != "tool_use":
+            break
+
+        # Execute all tool calls
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = execute_tool(block.name, block.input, chat_jid)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                })
+
+        if not tool_results:
+            break
+
+        messages.append({"role": "user", "content": tool_results})
+
+    return final_response
+
+
 def execute_tool(name: str, args: dict, chat_jid: str) -> str:
     """
     根據 Gemini 回傳的 function call 名稱，分派到對應的 tool 實作。
@@ -414,76 +470,6 @@ def emit(obj: dict):
     print(OUTPUT_END, flush=True)
 
 
-
-# ── Claude tool declarations ──────────────────────────────────────────────────
-
-CLAUDE_TOOL_DECLARATIONS = [
-    {"name": "Bash", "description": "Execute a bash command in /workspace/group.", "input_schema": {"type": "object", "properties": {"command": {"type": "string", "description": "The bash command to run"}}, "required": ["command"]}},
-    {"name": "Read", "description": "Read a file from the filesystem.", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string", "description": "Absolute path to the file"}}, "required": ["file_path"]}},
-    {"name": "Write", "description": "Write content to a file.", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string", "description": "Absolute path to write to"}, "content": {"type": "string", "description": "File content"}}, "required": ["file_path", "content"]}},
-    {"name": "Edit", "description": "Find and replace a string in a file.", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string", "description": "Path to the file"}, "old_string": {"type": "string", "description": "Exact text to replace"}, "new_string": {"type": "string", "description": "Replacement text"}}, "required": ["file_path", "old_string", "new_string"]}},
-    {"name": "mcp__evoclaw__send_message", "description": "Send a message to the user in the chat.", "input_schema": {"type": "object", "properties": {"text": {"type": "string", "description": "Message text"}, "sender": {"type": "string", "description": "Optional bot name"}}, "required": ["text"]}},
-    {"name": "mcp__evoclaw__schedule_task", "description": "Schedule a recurring or one-time task.", "input_schema": {"type": "object", "properties": {"prompt": {"type": "string", "description": "What to do when task runs"}, "schedule_type": {"type": "string", "description": "cron, interval, or once"}, "schedule_value": {"type": "string", "description": "Cron expr, ms, or ISO timestamp"}, "context_mode": {"type": "string", "description": "group or isolated"}}, "required": ["prompt", "schedule_type", "schedule_value"]}},
-]
-
-
-def run_agent_claude(client, system_instruction: str, user_message: str, chat_jid: str, model: str) -> str:
-    """
-    Claude (Anthropic) agentic loop.
-    Uses Anthropic's tool_use / tool_result protocol.
-    """
-    messages = [{"role": "user", "content": user_message}]
-    MAX_ITER = 30
-    final_response = ""
-
-    for _ in range(MAX_ITER):
-        response = client.messages.create(
-            model=model,
-            max_tokens=8096,
-            system=system_instruction,
-            tools=CLAUDE_TOOL_DECLARATIONS,
-            messages=messages,
-        )
-
-        # Collect assistant content blocks
-        assistant_blocks = response.content
-        messages.append({"role": "assistant", "content": assistant_blocks})
-
-        if response.stop_reason == "end_turn":
-            # Extract final text
-            final_response = " ".join(
-                b.text for b in assistant_blocks
-                if hasattr(b, "text") and b.text
-            )
-            break
-
-        if response.stop_reason != "tool_use":
-            # Unexpected stop reason — collect any text and exit
-            final_response = " ".join(
-                b.text for b in assistant_blocks
-                if hasattr(b, "text") and b.text
-            )
-            break
-
-        # Process tool calls
-        tool_results = []
-        for block in assistant_blocks:
-            if block.type != "tool_use":
-                continue
-            result = execute_tool(block.name, dict(block.input), chat_jid)
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": result,
-            })
-
-        if not tool_results:
-            break
-
-        messages.append({"role": "user", "content": tool_results})
-
-    return final_response
-
 def main():
     """
     container 的主入口：從 stdin 讀取 JSON 輸入，執行 agent，輸出結果到 stdout。
@@ -516,37 +502,29 @@ def main():
     # 若為空字串則不添加任何附加指引
     evolution_hints = inp.get("evolutionHints", "")
     assistant_name = inp.get("assistantName", "") or "Andy"
+    conversation_history = inp.get("conversationHistory", [])
 
     # 將 API 金鑰等敏感資料從 stdin JSON 設定到環境變數
     # 這樣 Gemini SDK 等依賴 os.environ 的函式庫就能自動取得
     for k, v in secrets.items():
         os.environ[k] = v
 
-    # ── Backend selection ─────────────────────────────────────────────────────────
-    # Priority: Claude > NIM/OpenAI-compatible > Gemini (default)
+    # ── Backend selection: NIM / OpenAI-compatible takes priority ────────────────
     nim_api_key = os.environ.get("NIM_API_KEY", "")
     openai_api_key = os.environ.get("OPENAI_API_KEY", "")
-    anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     google_api_key = os.environ.get("GOOGLE_API_KEY", "")
 
-    use_claude = bool(anthropic_api_key)
-    use_openai_compat = bool(nim_api_key or openai_api_key) and not use_claude
-
-    if use_claude and not _CLAUDE_AVAILABLE:
-        emit({"status": "error", "result": None, "error": "anthropic package not installed. Rebuild container after git pull."})
-        return
+    use_openai_compat = bool(nim_api_key or openai_api_key)
 
     if use_openai_compat and not _OPENAI_AVAILABLE:
         emit({"status": "error", "result": None, "error": "openai package not installed in container. Rebuild with updated requirements.txt."})
         return
 
-    if not use_claude and not use_openai_compat and not google_api_key:
-        emit({"status": "error", "result": None, "error": "No API key found. Set ANTHROPIC_API_KEY, GOOGLE_API_KEY, NIM_API_KEY, or OPENAI_API_KEY in .env"})
+    if not use_openai_compat and not google_api_key:
+        emit({"status": "error", "result": None, "error": "No API key found. Set GOOGLE_API_KEY, NIM_API_KEY, or OPENAI_API_KEY in .env"})
         return
 
-    if use_claude:
-        claude_client = _anthropic.Anthropic(api_key=anthropic_api_key)
-    elif use_openai_compat:
+    if use_openai_compat:
         _api_key = nim_api_key or openai_api_key
         _base_url = os.environ.get("NIM_BASE_URL", "https://integrate.api.nvidia.com/v1") if nim_api_key else os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
         openai_client = OpenAIClient(base_url=_base_url, api_key=_api_key)
@@ -582,6 +560,16 @@ def main():
             lines.append("")
             lines.append(Path(claude_md).read_text(encoding="utf-8"))
 
+    # 注入對話歷史（最近 N 則），讓 agent 記住之前的對話內容
+    if conversation_history:
+        lines.append("")
+        lines.append("=== Recent conversation history (oldest first) ===")
+        for msg in conversation_history[-24:]:  # 最多最近 24 則
+            role_label = "Assistant" if msg.get("role") == "assistant" else "User"
+            lines.append(f"[{role_label}]: {msg.get('content', '')}")
+        lines.append("=== End of history ===")
+        lines.append("Use the above history to maintain context and remember what was discussed.")
+
     # 演化引擎提示：附加在所有靜態設定之後（表觀遺傳，動態覆蓋）
     # 格式：\n\n---\n[環境自動調整提示...] 或 [群組偏好...]
     # 這些提示每次 container 啟動時都可能不同，反映當下的環境狀態
@@ -591,10 +579,7 @@ def main():
     system_instruction = "\n".join(lines)
 
     try:
-        if use_claude:
-            _model = os.environ.get("CLAUDE_MODEL", "claude-opus-4-5")
-            result = run_agent_claude(claude_client, system_instruction, prompt, chat_jid, _model)
-        elif use_openai_compat:
+        if use_openai_compat:
             _model = os.environ.get("NIM_MODEL") or os.environ.get("OPENAI_MODEL") or os.environ.get("GEMINI_MODEL") or "meta/llama-3.3-70b-instruct"
             result = run_agent_openai(openai_client, system_instruction, prompt, chat_jid, _model)
         else:
