@@ -352,6 +352,7 @@ def main():
     # 演化引擎注入的動態行為提示（表觀遺傳：環境感知 + 群組基因組風格）
     # 若為空字串則不添加任何附加指引
     evolution_hints = inp.get("evolutionHints", "")
+    assistant_name = inp.get("assistantName", "Andy")
 
     # 將 API 金鑰等敏感資料從 stdin JSON 設定到環境變數
     # 這樣 Gemini SDK 等依賴 os.environ 的函式庫就能自動取得
@@ -367,7 +368,11 @@ def main():
 
     # 建立系統提示詞：基本角色設定 + 環境資訊 + 群組自訂指令（CLAUDE.md）
     lines = [
-        "You are Evoclaw, a helpful AI assistant powered by Google Gemini.",
+        f"You are {assistant_name}, a personal AI assistant.",
+        f"Your name is {assistant_name}. Never say you are a large language model trained by Google.",
+        "Do not introduce yourself with phrases like 'I am a large language model' or 'trained by Google'.",
+        "Simply act as a capable personal assistant. Be concise and helpful.",
+        "Respond in the same language the user uses. Default to Traditional Chinese (繁體中文) unless instructed otherwise.",
         "You run inside a secure Docker container.",
         f"Working directory: {WORKSPACE}",
         f"Group folder: {group_folder}",
@@ -407,3 +412,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
