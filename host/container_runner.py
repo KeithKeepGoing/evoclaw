@@ -93,6 +93,7 @@ async def run_container_agent(
     session_id: Optional[str] = None,
     is_scheduled_task: bool = False,
     on_success: Optional[Callable[[], Awaitable[None]]] = None,
+    conversation_history: list | None = None,
 ) -> dict:
     """
     在獨立的 Docker container 中執行 agent，並等待結果。
@@ -146,7 +147,7 @@ async def run_container_agent(
         "assistantName": config.ASSISTANT_NAME,
         "secrets": secrets,  # API keys 等，container 內讀取後設定為 env vars
         "evolutionHints": evolution_hints,  # 演化引擎動態注入的行為指引
-        "conversationHistory": conv_history,  # 最近的對話歷史，提供記憶能力
+        "conversationHistory": conversation_history if conversation_history is not None else conv_history,  # 最近的對話歷史，提供記憶能力
     }
     input_json = json.dumps(input_data, ensure_ascii=True)
     # 記錄 container 啟動時間，用於計算回應時間（適應度追蹤）
