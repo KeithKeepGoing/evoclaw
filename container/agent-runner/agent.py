@@ -237,22 +237,22 @@ OPENAI_TOOL_DECLARATIONS = [
 _messages_sent_via_tool: list = []
 
 
-# Claude (Anthropic) tool declarations
-CLAUDE_TOOL_DECLARATIONS = [
-    {"name": "Bash", "description": "Execute a bash command in /workspace/group.", "input_schema": {"type": "object", "properties": {"command": {"type": "string", "description": "The bash command to run"}}, "required": ["command"]}},
-    {"name": "Read", "description": "Read a file from the filesystem.", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string", "description": "Absolute path to the file"}}, "required": ["file_path"]}},
-    {"name": "Write", "description": "Write content to a file.", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string"}, "content": {"type": "string"}}, "required": ["file_path", "content"]}},
-    {"name": "Edit", "description": "Find and replace a string in a file.", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}, "required": ["file_path", "old_string", "new_string"]}},
-    {"name": "mcp__evoclaw__send_message", "description": "Send a message to the user.", "input_schema": {"type": "object", "properties": {"text": {"type": "string"}, "sender": {"type": "string"}}, "required": ["text"]}},
-    {"name": "mcp__evoclaw__schedule_task", "description": "Schedule a task.", "input_schema": {"type": "object", "properties": {"prompt": {"type": "string"}, "schedule_type": {"type": "string"}, "schedule_value": {"type": "string"}, "context_mode": {"type": "string"}}, "required": ["prompt", "schedule_type", "schedule_value"]}},
-]
-
-
 def run_agent_claude(client, model: str, system_instruction: str, user_message: str, chat_jid: str) -> str:
     """
-    Anthropic Claude agentic loop.
-    Uses Claude's tool use API format.
+    Anthropic Claude agentic loop with native tool calling support.
     """
+    import json as _json
+
+    # Build Claude tool definitions
+    claude_tools = [
+        {"name": "Bash", "description": "Execute a bash command in /workspace/group.", "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
+        {"name": "Read", "description": "Read a file from the filesystem.", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string"}}, "required": ["file_path"]}},
+        {"name": "Write", "description": "Write content to a file.", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string"}, "content": {"type": "string"}}, "required": ["file_path", "content"]}},
+        {"name": "Edit", "description": "Find and replace a string in a file.", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}, "required": ["file_path", "old_string", "new_string"]}},
+        {"name": "mcp__evoclaw__send_message", "description": "Send a message to the user.", "input_schema": {"type": "object", "properties": {"text": {"type": "string"}, "sender": {"type": "string"}}, "required": ["text"]}},
+        {"name": "mcp__evoclaw__schedule_task", "description": "Schedule a task.", "input_schema": {"type": "object", "properties": {"prompt": {"type": "string"}, "schedule_type": {"type": "string"}, "schedule_value": {"type": "string"}, "context_mode": {"type": "string"}}, "required": ["prompt", "schedule_type", "schedule_value"]}},
+    ]
+
     messages = [{"role": "user", "content": user_message}]
     MAX_ITER = 30
     final_response = ""
@@ -262,15 +262,14 @@ def run_agent_claude(client, model: str, system_instruction: str, user_message: 
             model=model,
             max_tokens=4096,
             system=system_instruction,
-            tools=CLAUDE_TOOL_DECLARATIONS,
+            tools=claude_tools,
             messages=messages,
         )
-
-        # Add assistant response to history
         messages.append({"role": "assistant", "content": response.content})
 
+        # Check stop reason
         if response.stop_reason == "end_turn":
-            # Collect all text blocks
+            # Collect text responses
             final_response = " ".join(
                 block.text for block in response.content
                 if hasattr(block, "text")
@@ -278,23 +277,25 @@ def run_agent_claude(client, model: str, system_instruction: str, user_message: 
             break
 
         if response.stop_reason != "tool_use":
+            final_response = " ".join(
+                block.text for block in response.content
+                if hasattr(block, "text")
+            )
             break
 
-        # Execute all tool calls
+        # Execute tool calls
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
-                result = execute_tool(block.name, block.input, chat_jid)
+                result = execute_tool(block.name, dict(block.input), chat_jid)
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
                     "content": result,
                 })
 
-        if not tool_results:
-            break
-
-        messages.append({"role": "user", "content": tool_results})
+        if tool_results:
+            messages.append({"role": "user", "content": tool_results})
 
     return final_response
 
