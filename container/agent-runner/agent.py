@@ -504,8 +504,6 @@ def main():
             result = run_agent_openai(openai_client, system_instruction, prompt, chat_jid, _model)
         else:
             result = run_agent(client, system_instruction, prompt, chat_jid, assistant_name)
-        if result:
-            tool_send_message(chat_jid, result)
         emit({"status": "success", "result": result, "newSessionId": f"evoclaw-{int(time.time())}"})
     except Exception as e:
         emit({"status": "error", "result": None, "error": str(e)})
