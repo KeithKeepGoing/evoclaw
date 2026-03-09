@@ -248,21 +248,19 @@ CLAUDE_TOOL_DECLARATIONS = [
 ]
 
 
-def run_agent_claude(client, model: str, system_instruction: str, user_message: str, chat_jid: str, conv_history: list = None) -> str:
+def run_agent_claude(client, model: str, system_instruction: str, user_message: str, chat_jid: str, conversation_history: list = None) -> str:
     """
     Anthropic Claude agentic loop.
-    Uses Claude's tool use API format.
+    conversation_history: 最近的對話記錄，以原生 multi-turn 格式注入。
     """
-    # Pre-populate with conversation history for native multi-turn context
     messages = []
-    for h in (conv_history or []):
-        role = h.get("role", "user")
-        if role not in ("user", "assistant"):
-            role = "user"
-        messages.append({"role": role, "content": h.get("content", "")})
-    # Ensure history ends properly before adding current message
-    if messages and messages[-1]["role"] == "user":
-        messages.append({"role": "assistant", "content": "..."})
+    # 注入對話歷史（原生 multi-turn 格式）
+    if conversation_history:
+        for msg in conversation_history:
+            role = msg.get("role", "user")
+            text = msg.get("content", "")
+            if text:
+                messages.append({"role": role, "content": text})
     messages.append({"role": "user", "content": user_message})
     MAX_ITER = 30
     final_response = ""
@@ -335,21 +333,21 @@ def execute_tool(name: str, args: dict, chat_jid: str) -> str:
 
 # ── Agentic loop ──────────────────────────────────────────────────────────────
 
-def run_agent_openai(client, system_instruction: str, user_message: str, chat_jid: str, model: str, conv_history: list = None) -> str:
+def run_agent_openai(client, system_instruction: str, user_message: str, chat_jid: str, model: str, conversation_history: list = None) -> str:
     """
     OpenAI-compatible agentic loop (NVIDIA NIM / OpenAI / Groq / etc.)
     Works the same as run_agent but uses OpenAI chat completions API.
+    conversation_history: 原生 multi-turn 格式的對話歷史。
     """
     import json as _json
-    # Pre-populate with conversation history for native multi-turn context
     history = [{"role": "system", "content": system_instruction}]
-    for h in (conv_history or []):
-        role = h.get("role", "user")
-        if role == "assistant":
-            role = "assistant"
-        else:
-            role = "user"
-        history.append({"role": role, "content": h.get("content", "")})
+    # 注入對話歷史（原生 multi-turn 格式）
+    if conversation_history:
+        for msg in conversation_history:
+            role = msg.get("role", "user")
+            text = msg.get("content", "")
+            if text:
+                history.append({"role": role, "content": text})
     history.append({"role": "user", "content": user_message})
     MAX_ITER = 30
     final_response = ""
@@ -395,7 +393,7 @@ def run_agent_openai(client, system_instruction: str, user_message: str, chat_ji
 
 
 
-def run_agent(client: genai.Client, system_instruction: str, user_message: str, chat_jid: str, assistant_name: str = "Andy", conv_history: list = None) -> str:
+def run_agent(client: genai.Client, system_instruction: str, user_message: str, chat_jid: str, assistant_name: str = "Andy", conversation_history: list = None) -> str:
     """
     Gemini function-calling 代理迴圈（agentic loop）。
 
@@ -415,24 +413,21 @@ def run_agent(client: genai.Client, system_instruction: str, user_message: str, 
     history 維護完整的對話記錄（user / model / tool_response），
     讓 Gemini 在每次迭代都有完整的上下文，不需要重新解釋先前的工具結果。
     """
-    # Few-shot example: teach identity response for direct "who are you" questions
+    # Few-shot: only teach identity response for direct "who are you" questions.
+    # Avoid adding examples too similar to real user queries — that causes the model
+    # to apply the identity template to all questions (the "always says Andy" bug).
     identity_response = f"我是 {assistant_name}，你的個人 AI 助理！有什麼需要幫忙的嗎？"
     history = [
         types.Content(role="user", parts=[types.Part(text="你是誰？你是什麼AI？你是Google的嗎？")]),
         types.Content(role="model", parts=[types.Part(text=identity_response)]),
     ]
-    # Pre-populate with conversation history for native multi-turn context
-    # Gemini requires strictly alternating user/model roles
-    prev_role = "model"  # last item in history is model, so next should be user
-    for h in (conv_history or []):
-        role = "model" if h.get("role") == "assistant" else "user"
-        if role == prev_role:
-            continue  # skip consecutive same-role to maintain alternation
-        history.append(types.Content(role=role, parts=[types.Part(text=h.get("content", ""))]))
-        prev_role = role
-    # Ensure we can safely append the current user message
-    if history and history[-1].role == "user":
-        history.append(types.Content(role="model", parts=[types.Part(text="...")]))
+    # 注入對話歷史（原生 multi-turn 格式），放在 few-shot 之後、當前訊息之前
+    if conversation_history:
+        for msg in conversation_history:
+            role = "model" if msg.get("role") == "assistant" else "user"
+            text = msg.get("content", "")
+            if text:
+                history.append(types.Content(role=role, parts=[types.Part(text=text)]))
     history.append(types.Content(role="user", parts=[types.Part(text=user_message)]))
 
     MAX_ITER = 30  # 最多迭代次數，防止無限迴圈
@@ -540,21 +535,28 @@ def main():
     openai_api_key = os.environ.get("OPENAI_API_KEY", "")
     google_api_key = os.environ.get("GOOGLE_API_KEY", "")
 
+    claude_api_key = os.environ.get("CLAUDE_API_KEY", "")
+    claude_model = os.environ.get("CLAUDE_MODEL", "claude-3-5-haiku-latest")
     use_openai_compat = bool(nim_api_key or openai_api_key)
+    use_claude = bool(claude_api_key and not use_openai_compat)
 
     if use_openai_compat and not _OPENAI_AVAILABLE:
         emit({"status": "error", "result": None, "error": "openai package not installed in container. Rebuild with updated requirements.txt."})
         return
 
-    if not use_openai_compat and not google_api_key:
-        emit({"status": "error", "result": None, "error": "No API key found. Set GOOGLE_API_KEY, NIM_API_KEY, or OPENAI_API_KEY in .env"})
+    if use_claude and not _ANTHROPIC_AVAILABLE:
+        emit({"status": "error", "result": None, "error": "anthropic package not installed. Rebuild container."})
+        return
+
+    if not use_openai_compat and not use_claude and not google_api_key:
+        emit({"status": "error", "result": None, "error": "No API key found. Set GOOGLE_API_KEY, NIM_API_KEY, CLAUDE_API_KEY, or OPENAI_API_KEY in .env"})
         return
 
     if use_openai_compat:
         _api_key = nim_api_key or openai_api_key
         _base_url = os.environ.get("NIM_BASE_URL", "https://integrate.api.nvidia.com/v1") if nim_api_key else os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
         openai_client = OpenAIClient(base_url=_base_url, api_key=_api_key)
-    else:
+    elif not use_claude:
         client = genai.Client(api_key=google_api_key)
 
     # 建立系統提示詞：基本角色設定 + 環境資訊 + 群組自訂指令（CLAUDE.md）
@@ -586,8 +588,6 @@ def main():
             lines.append("")
             lines.append(Path(claude_md).read_text(encoding="utf-8"))
 
-    # Conversation history is now passed directly to each backend's messages array (multi-turn)
-
     # 演化引擎提示：附加在所有靜態設定之後（表觀遺傳，動態覆蓋）
     # 格式：\n\n---\n[環境自動調整提示...] 或 [群組偏好...]
     # 這些提示每次 container 啟動時都可能不同，反映當下的環境狀態
@@ -599,9 +599,12 @@ def main():
     try:
         if use_openai_compat:
             _model = os.environ.get("NIM_MODEL") or os.environ.get("OPENAI_MODEL") or os.environ.get("GEMINI_MODEL") or "meta/llama-3.3-70b-instruct"
-            result = run_agent_openai(openai_client, system_instruction, prompt, chat_jid, _model, conv_history=conversation_history)
+            result = run_agent_openai(openai_client, system_instruction, prompt, chat_jid, _model, conversation_history)
+        elif use_claude:
+            claude_client = anthropic.Anthropic(api_key=claude_api_key)
+            result = run_agent_claude(claude_client, claude_model, system_instruction, prompt, chat_jid, conversation_history)
         else:
-            result = run_agent(client, system_instruction, prompt, chat_jid, assistant_name, conv_history=conversation_history)
+            result = run_agent(client, system_instruction, prompt, chat_jid, assistant_name, conversation_history)
         # 若 agent 已透過 mcp__evoclaw__send_message 工具主動發送訊息，
         # 則清空 result 欄位，避免 host 的 container_runner 再次發送（雙重訊息 + 超長訊息 bug）
         # 若 agent 沒有呼叫工具（純文字回覆），則由 host 負責發送 result
