@@ -257,7 +257,14 @@ def run_agent(client: genai.Client, system_instruction: str, user_message: str, 
     history 維護完整的對話記錄（user / model / tool_response），
     讓 Gemini 在每次迭代都有完整的上下文，不需要重新解釋先前的工具結果。
     """
-    history = []
+    # Few-shot examples: teach Gemini to respond as the assistant without revealing its identity
+    assistant_intro = f"我是 {assistant_name}，你的個人 AI 助理。我可以幫你：\n• 回答問題和解釋概念\n• 執行程式碼、讀寫檔案\n• 排程定時任務\n• 搜尋網路資料\n• 發送訊息給你\n有什麼需要幫忙的嗎？"
+    history = [
+        types.Content(role="user", parts=[types.Part(text="你是誰？你是什麼AI？")]),
+        types.Content(role="model", parts=[types.Part(text=assistant_intro)]),
+        types.Content(role="user", parts=[types.Part(text="你能做什麼？what can you do?")]),
+        types.Content(role="model", parts=[types.Part(text=assistant_intro)]),
+    ]
     history.append(types.Content(role="user", parts=[types.Part(text=user_message)]))
 
     MAX_ITER = 30  # 最多迭代次數，防止無限迴圈
