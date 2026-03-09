@@ -121,10 +121,12 @@ def tool_send_message(chat_jid: str, text: str, sender: str = None) -> str:
         return f"Error: {e}"
 
 
-def tool_schedule_task(prompt: str, schedule_type: str, schedule_value: str, context_mode: str = "group") -> str:
+def tool_schedule_task(prompt: str, schedule_type: str, schedule_value: str, context_mode: str = "group", chat_jid: str = "") -> str:
     """
     透過 IPC 機制建立排程任務（寫入 JSON 檔案到 tasks/ 子目錄）。
     host 的 ipc_watcher 讀取後會呼叫 db.create_task 正式寫入 DB。
+    chat_jid 必須包含在 payload 中，讓 ipc_watcher 能將正確的群組 JID 存入 DB，
+    供排程器執行任務時路由回正確的聊天室。
     """
     try:
         Path(IPC_TASKS_DIR).mkdir(parents=True, exist_ok=True)
@@ -135,6 +137,7 @@ def tool_schedule_task(prompt: str, schedule_type: str, schedule_value: str, con
             "schedule_type": schedule_type,   # "cron", "interval", 或 "once"
             "schedule_value": schedule_value,  # cron 表達式、毫秒數、或 ISO 時間字串
             "context_mode": context_mode,      # "group" 或 "isolated"
+            "chatJid": chat_jid,              # 群組 JID，讓 ipc_watcher 存入 DB 供排程器路由使用
         }), encoding="utf-8")
         return "Task scheduled"
     except Exception as e:
@@ -326,7 +329,8 @@ def execute_tool(name: str, args: dict, chat_jid: str) -> str:
     elif name == "mcp__evoclaw__schedule_task":
         return tool_schedule_task(
             args["prompt"], args["schedule_type"], args["schedule_value"],
-            args.get("context_mode", "group")
+            args.get("context_mode", "group"),
+            chat_jid,
         )
     return f"Unknown tool: {name}"
 
