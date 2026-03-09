@@ -3,56 +3,64 @@
 </p>
 
 <p align="center">
-  A Gemini-powered AI assistant that runs agents securely in their own containers.<br>
-  Lightweight, 100% Python, built to be easily understood and completely customized.
+  由 Gemini 驅動的 AI 助手，在獨立容器中安全執行代理。<br>
+  輕量、100% Python，易於理解與完全客製化。
 </p>
 
 <p align="center">
-  <a href="README_zh.md">繁體中文</a>&nbsp; • &nbsp;
+  <a href="README_en.md">English</a>&nbsp; • &nbsp;
+  <a href="README_zh.md">完整中文文件</a>&nbsp; • &nbsp;
   <a href="https://github.com/KeithKeepGoing/evoclaw">GitHub</a>
 </p>
 
-Fork of [nanoclaw](https://github.com/qwibitai/nanoclaw) — fully rewritten in Python with Google Gemini API.
-Ships with a built-in **evolution engine** that makes the assistant adapt and improve over time.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11+-blue?logo=python" alt="Python">
+  <img src="https://img.shields.io/badge/AI-Google%20Gemini-4285F4?logo=google" alt="Gemini">
+  <img src="https://img.shields.io/badge/Container-Docker-2496ED?logo=docker" alt="Docker">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT">
+</p>
+
+Fork 自 [nanoclaw](https://github.com/qwibitai/nanoclaw) — 完全以 Python 重寫，使用 Google Gemini API。
+內建**進化引擎**，讓助手隨著使用自動學習與改進。
 
 ---
 
-## Philosophy
+## 設計理念
 
-**Small enough to understand.** One process, ~42 Python files, no microservices. You can read the entire codebase in an afternoon. If you want to understand how something works, just read the source.
+**小巧易懂。** 單一進程，約 42 個 Python 檔案，無微服務。你可以在一個下午讀完整個程式碼。想了解某個功能怎麼運作？直接看原始碼。
 
-**Secure by isolation.** Agents run in Linux containers (Docker). They can only see what's explicitly mounted. Bash access is safe because commands run inside the container, not on your host machine. Security is at the OS level, not the application level.
+**通過隔離保障安全。** 代理在 Linux 容器（Docker）中執行，只能看到明確掛載的內容。即使有 Bash 存取，命令也在容器內執行，不影響你的主機。安全性在作業系統層級，不是應用層級。
 
-**Built for the individual user.** EvoClaw isn't a monolithic framework — it's software that fits your exact needs. Make your own fork and modify it. The codebase is small enough that changes are safe and understandable.
+**為個人用戶打造。** EvoClaw 不是龐大的框架，而是完全符合你需求的軟體。Fork 這個專案，依照你的需求修改。程式碼庫夠小，改動安全且容易理解。
 
-**Customization = code changes.** No configuration sprawl. Want different behavior? Modify the code directly. There's no dashboard, no config wizard, no bloat.
+**客製化即修改程式碼。** 沒有繁雜的設定檔。想要不同的行為？直接修改程式碼。不需要儀表板、設定精靈或多餘的東西。
 
-**AI-native.**
-- No installation wizard — `python setup/setup.py` handles everything
-- No monitoring dashboard — ask the agent what's happening
-- No debugging tools — describe the problem and the agent fixes it
+**AI 原生。**
+- 無安裝精靈 — `python setup/setup.py` 處理一切
+- 無監控儀表板 — 直接問代理系統狀況
+- 無除錯工具 — 描述問題，代理會修復它
 
-**Skills over features.** Add capabilities via the `skills_engine/` system rather than hardcoding everything. Keep the base clean and composable.
+**技能優於功能。** 透過 `skills_engine/` 系統新增能力，而不是硬編碼。保持核心乾淨且可組合。
 
-**Evolves, not just runs.** The built-in evolution engine (`host/evolution/`) lets the assistant adapt like a living organism — automatically tuning response style per group, detecting threats, and sensing system load. No manual tuning required.
-
----
-
-## What It Does
-
-- Talk to your AI assistant from **Telegram, WhatsApp, Discord, Slack, or Gmail**
-- Every agent session runs in an **isolated Docker container** (secure by design)
-- Powered by **Google Gemini 2.0 Flash**
-- **Scheduled tasks** — cron, interval, one-time
-- **Per-group memory** via `MEMORY.md` files in each group folder
-- **Agent Swarms** — spin up teams of specialized agents that collaborate on complex tasks
-- Available tools: Bash, Read, Write, Edit, send_message, schedule_task, and more
-- **100% Python** — no Node.js, no TypeScript, no compilation step
-- 🧬 **Evolution Engine** — AI behavior auto-optimizes with use (see below)
+**自動進化，不只是執行。** 內建進化引擎（`host/evolution/`）讓助手像生物一樣自我適應 — 自動調整各群組的回應風格、偵測威脅、感知系統負載。無需手動調整。
 
 ---
 
-## Quick Start
+## 功能特色
+
+- 透過 **Telegram、WhatsApp、Discord、Slack 或 Gmail** 與 AI 助手對話
+- 每個代理工作階段在**獨立的 Docker 容器**中執行（安全隔離）
+- 由 **Google Gemini 2.0 Flash** 驅動
+- **排程任務** — 支援 cron、間隔、一次性執行
+- **每群組記憶**：各群組資料夾內的 `MEMORY.md` 檔案
+- **代理集群（Agent Swarms）** — 組建專業代理團隊，協作處理複雜任務
+- 可用工具：Bash、Read、Write、Edit、send_message、schedule_task 等
+- **100% Python** — 無 Node.js、無 TypeScript、無編譯步驟
+- 🧬 **進化引擎** — AI 行為隨使用自動優化（詳見下方）
+
+---
+
+## 快速開始
 
 ```bash
 git clone https://github.com/KeithKeepGoing/evoclaw.git
@@ -60,300 +68,300 @@ cd evoclaw
 python setup/setup.py
 ```
 
-The setup wizard handles everything: API keys, Docker, channel registration.
+設定精靈會處理一切：API 金鑰、Docker、頻道註冊。
 
 ---
 
-## Requirements
+## 系統需求
 
 - Python 3.11+
 - Docker
-- A free **Google Gemini API key** from [aistudio.google.com](https://aistudio.google.com)
+- 免費的 **Google Gemini API 金鑰**，取自 [aistudio.google.com](https://aistudio.google.com)
 
 ---
 
-## Manual Setup
+## 手動安裝
 
 ```bash
-# 1. Clone
+# 1. 克隆專案
 git clone https://github.com/KeithKeepGoing/evoclaw.git
 cd evoclaw
 
-# 2. Configure
+# 2. 設定環境變數
 cp .env.example .env
-# Edit .env with your GOOGLE_API_KEY and channel tokens
+# 在 .env 中填入 GOOGLE_API_KEY 和頻道 token
 
-# 3. Install Python dependencies
+# 3. 安裝 Python 依賴
 pip install -r host/requirements.txt
 
-# 4. Build the Docker container
+# 4. 建置 Docker 容器
 cd container && docker build -t evoclaw-agent . && cd ..
 
-# 5. Start
+# 5. 啟動
 python run.py
 ```
 
 ---
 
-## Getting a Free Gemini API Key
+## 取得免費 Gemini API 金鑰
 
-1. Go to [aistudio.google.com](https://aistudio.google.com)
-2. Sign in with your Google account
-3. Click **Get API key** → **Create API key**
-4. Paste it into your `.env` file as `GOOGLE_API_KEY=...`
+1. 前往 [aistudio.google.com](https://aistudio.google.com)
+2. 使用 Google 帳號登入
+3. 點選 **Get API key** → **Create API key**
+4. 貼入 `.env` 檔案的 `GOOGLE_API_KEY=...`
 
-> This is separate from a Gemini Advanced subscription. The free tier has generous limits.
-
----
-
-## Usage
-
-Talk to your assistant using the trigger word (default: `@Andy`):
-
-```
-@Andy summarize the sales pipeline every weekday morning at 9am
-@Andy review the git history every Friday and update the README if there's drift
-@Andy every Monday at 8am, compile AI news from Hacker News and message me a briefing
-@Andy what files changed in the last 3 commits?
-@Andy spin up a team of agents to research and write a market analysis report
-```
-
-### Main Channel
-
-Your private self-chat is the **main channel** — your admin console. From here:
-
-```
-@Andy list all scheduled tasks across all groups
-@Andy pause the Monday briefing task
-@Andy register the "team-chat" group with jid dc:1234567890:9876543210
-@Andy what's in the recent error logs?
-```
-
-Every other group is fully isolated from the main channel and from each other.
+> 這與 Gemini Advanced 訂閱無關。免費方案有相當寬裕的用量限制。
 
 ---
 
-## Channels
+## 使用方式
 
-Enable channels by setting `ENABLED_CHANNELS` in `.env`:
+使用觸發詞（預設為 `@Andy`）與助手對話：
+
+```
+@Andy 每個工作日早上 9 點整理銷售管線摘要
+@Andy 每週五回顧 git 歷史，若與 README 有落差就更新它
+@Andy 每週一早上 8 點，從 Hacker News 收集 AI 新聞並發送簡報
+@Andy 最近 3 個 commit 改了哪些檔案？
+@Andy 組建一個代理團隊來研究並撰寫市場分析報告
+```
+
+### 主頻道
+
+你的私人自聊（self-chat）是**主頻道** — 你的管理控制台。在這裡可以：
+
+```
+@Andy 列出所有群組的排程任務
+@Andy 暫停週一簡報任務
+@Andy 用 jid dc:1234567890:9876543210 註冊「team-chat」群組
+@Andy 最近的錯誤日誌裡有什麼？
+```
+
+每個其他群組都與主頻道以及彼此完全隔離。
+
+---
+
+## 支援頻道
+
+在 `.env` 中設定 `ENABLED_CHANNELS` 來啟用頻道：
 
 ```bash
 ENABLED_CHANNELS=telegram,discord,slack
 ```
 
-| Channel | Required Env Vars |
-|---------|------------------|
+| 頻道 | 所需環境變數 |
+|------|------------|
 | Telegram | `TELEGRAM_BOT_TOKEN` |
 | WhatsApp | `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN` |
 | Slack | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` |
 | Discord | `DISCORD_BOT_TOKEN` |
 | Gmail | `GMAIL_CREDENTIALS_FILE`, `GMAIL_TOKEN_FILE` |
 
-See `.env.example` for all available options.
+更多選項請參閱 `.env.example`。
 
 ---
 
-## Customizing
+## 客製化
 
-EvoClaw has no configuration files. To change behavior, modify the code directly:
+EvoClaw 沒有設定檔。想改變行為，直接修改程式碼：
 
-- "Change the trigger word to @Eve"
-- "Make responses shorter and more direct"
-- "Add a greeting when someone says good morning"
-- "Store conversation summaries weekly to each group's memory file"
+- 「把觸發詞改成 @Eve」
+- 「讓回應更簡短直接」
+- 「有人說早安時加上問候語」
+- 「每週把對話摘要存到各群組的記憶檔案」
 
-The codebase is only ~42 Python files — safe and easy to change.
+整個程式碼庫只有約 42 個 Python 檔案 — 安全且容易修改。
 
 ---
 
-## Project Structure
+## 專案結構
 
 ```
 evoclaw/
-├── run.py                        ← Start here: python run.py
-├── host/                         ← Python host orchestrator
-│   ├── main.py                   ← Entry point (message loop, IPC, scheduler)
-│   ├── config.py                 ← Configuration from environment
-│   ├── db.py                     ← SQLite database
-│   ├── router.py                 ← Message routing
-│   ├── group_queue.py            ← Per-group queue + concurrency control
-│   ├── container_runner.py       ← Docker container management
-│   ├── ipc_watcher.py            ← Agent↔Host IPC
-│   ├── task_scheduler.py         ← Scheduled tasks
-│   ├── allowlist.py              ← Sender/mount allowlists
-│   ├── requirements.txt          ← Python dependencies
-│   ├── evolution/                ← 🧬 Evolution Engine
-│   │   ├── fitness.py            ←   Fitness tracking (natural selection)
-│   │   ├── adaptive.py           ←   Epigenetic hints (environment sensing)
-│   │   ├── genome.py             ←   Group genome (speciation)
-│   │   ├── immune.py             ←   Immune system (threat detection)
-│   │   └── daemon.py             ←   Evolution Daemon (24h cycle)
+├── run.py                        ← 入口：python run.py
+├── host/                         ← Python 主機協調器
+│   ├── main.py                   ← 訊息迴圈、IPC 監視器、排程器
+│   ├── config.py                 ← 從環境變數讀取設定
+│   ├── db.py                     ← SQLite 資料庫
+│   ├── router.py                 ← 訊息路由
+│   ├── group_queue.py            ← 每群組佇列與並發控制
+│   ├── container_runner.py       ← Docker 容器管理
+│   ├── ipc_watcher.py            ← 代理↔主機 IPC
+│   ├── task_scheduler.py         ← 排程任務
+│   ├── allowlist.py              ← 寄件者/掛載白名單
+│   ├── requirements.txt          ← Python 依賴
+│   ├── evolution/                ← 🧬 進化引擎
+│   │   ├── fitness.py            ←   適應度追蹤（自然選擇）
+│   │   ├── adaptive.py           ←   表觀遺傳提示（環境感知）
+│   │   ├── genome.py             ←   群組基因組（物種分化）
+│   │   ├── immune.py             ←   免疫系統（威脅偵測）
+│   │   └── daemon.py             ←   進化守護程式（24 小時週期）
 │   └── channels/
-│       ├── telegram_channel.py   ← Telegram (long polling)
-│       ├── whatsapp_channel.py   ← WhatsApp (Meta Cloud API + webhook)
-│       ├── slack_channel.py      ← Slack (Socket Mode)
-│       ├── discord_channel.py    ← Discord (discord.py)
-│       └── gmail_channel.py      ← Gmail (OAuth2 polling)
+│       ├── telegram_channel.py   ← Telegram（長輪詢）
+│       ├── whatsapp_channel.py   ← WhatsApp（Meta Cloud API + webhook）
+│       ├── slack_channel.py      ← Slack（Socket Mode）
+│       ├── discord_channel.py    ← Discord（discord.py）
+│       └── gmail_channel.py      ← Gmail（OAuth2 輪詢）
 ├── container/
 │   └── agent-runner/
-│       ├── agent.py              ← Gemini 2.0 Flash agent (Python)
+│       ├── agent.py              ← Gemini 2.0 Flash 代理（Python）
 │       └── requirements.txt      ← google-genai
-├── skills_engine/                ← Plugin system (apply/uninstall skills)
-├── scripts/                      ← CLI utility scripts
+├── skills_engine/                ← 插件系統
+├── scripts/                      ← CLI 工具腳本
 └── groups/
-    └── {group-name}/
-        └── MEMORY.md             ← Per-group memory file
+    └── {群組名稱}/
+        └── MEMORY.md             ← 每群組記憶檔案
 ```
 
 ---
 
-## Evolution Engine
+## 進化引擎
 
-EvoClaw ships with a bio-inspired self-adaptation system. The assistant automatically improves over time without manual tuning.
+EvoClaw 內建受生物學啟發的自我適應系統，助手會隨著時間自動改進，無需手動調整。
 
-### 🧬 Four Mechanisms
+### 🧬 四大機制
 
-**① Fitness Tracking (Natural Selection)**
-Every AI response records performance metrics (response time, success rate, retry count), computing a 0.0–1.0 fitness score as the basis for all evolutionary decisions.
+**① 適應度追蹤（自然選擇）**
+每次 AI 回應都會記錄效能指標（回應時間、成功率、重試次數），計算 0.0–1.0 的適應度分數，作為所有進化決策的基礎。
 
-**② Epigenetic Adaptation**
-The environment shapes behavior without touching your `MEMORY.md`:
-- High system load → AI automatically gives shorter answers
-- Late night (0–6am) → switches to casual tone
-- Weekend → more relaxed conversation style
+**② 表觀遺傳適應**
+環境影響行為，無需修改 `MEMORY.md`：
+- 系統負載高 → AI 自動給出更短的回答
+- 深夜（凌晨 0–6 點）→ 切換為輕鬆語調
+- 週末 → 更隨意的對話風格
 
-**③ Group Genome (Speciation)**
-Each group has its own behavioral genome (response style, formality, technical depth).
-An Evolution Daemon runs every 24 hours, analyzing usage data and adjusting each group's genome independently — technical groups grow more technical, casual groups grow more relaxed.
+**③ 群組基因組（物種分化）**
+每個群組都有自己的行為基因組（回應風格、正式程度、技術深度）。
+進化守護程式每 24 小時執行一次，分析使用數據並獨立調整各群組的基因組 — 技術性群組會越來越技術化，輕鬆的群組會越來越隨意。
 
-**④ Immune System**
-Automatically detects prompt injection attacks ("ignore previous instructions") and spam flooding. Builds persistent immune memory — accumulated threats trigger automatic sender blocking with no human intervention needed.
+**④ 免疫系統**
+自動偵測提示詞注入攻擊（「忽略之前的指令」）和垃圾訊息洪水。建立持久的免疫記憶 — 累積的威脅會觸發自動封鎖寄件者，無需人工介入。
 
 ```
-Message received
-    ↓ Immune check (injection / spam detection)
-Stored to DB
-    ↓ Epigenetic hints computed from environment
-Container starts (with evolution hints injected)
-    ↓ AI responds
-Fitness score recorded
-    ↓ Every 24h
-Evolution Daemon adjusts group genome
+收到訊息
+    ↓ 免疫檢查（注入/垃圾訊息偵測）
+存入資料庫
+    ↓ 從環境計算表觀遺傳提示
+啟動容器（注入進化提示）
+    ↓ AI 回應
+記錄適應度分數
+    ↓ 每 24 小時
+進化守護程式調整群組基因組
 ```
 
 ---
 
-## Architecture
+## 架構
 
 ```
 Telegram / WhatsApp / Discord / Slack / Gmail
                     ↓
-           Host (Python, single process)
-           ├── Message loop (polls SQLite)
-           ├── Immune System (injection / spam blocking)
-           ├── GroupQueue (one container per group, global concurrency limit)
-           ├── IPC watcher (agent → host messages)
-           ├── Task scheduler (cron / interval / once)
-           └── Evolution Daemon (24h evolution cycle)
-                    ↓ spawns (with evolution hints)
-           Docker Container (isolated per group)
-                    ↓ runs
+           主機（Python，單一進程）
+           ├── 訊息迴圈（輪詢 SQLite）
+           ├── 免疫系統（注入/垃圾訊息封鎖）
+           ├── GroupQueue（每群組一個容器，全局並發限制）
+           ├── IPC 監視器（代理 → 主機訊息）
+           ├── 排程器（cron / 間隔 / 一次性）
+           └── 進化守護程式（24 小時進化週期）
+                    ↓ 產生（注入進化提示）
+           Docker 容器（每群組獨立隔離）
+                    ↓ 執行
            agent.py + Gemini 2.0 Flash
-           + tools (Bash, Read, Write, Edit, send_message, schedule_task, ...)
+           + 工具（Bash、Read、Write、Edit、send_message、schedule_task 等）
                     ↓
-           Fitness recorded → Response routed back to the right channel
+           記錄適應度 → 回應路由到正確頻道
 ```
 
-- Each group has its own isolated container, workspace, and memory (`MEMORY.md`)
-- GroupQueue ensures one container per group — messages queue up if the agent is busy
-- Global concurrency limit (`MAX_CONCURRENT_CONTAINERS`) prevents resource exhaustion
-- Cursor rollback: cursor only advances after successful agent output — no missed messages
-- Evolution Engine: fitness tracking + epigenetic hints + group genome + immune system
+- 每個群組有自己獨立的容器、工作區和記憶（`MEMORY.md`）
+- GroupQueue 確保每群組同時只有一個容器 — 代理忙碌時訊息會排隊等候
+- 全局並發限制（`MAX_CONCURRENT_CONTAINERS`）防止資源耗盡
+- 游標回滾：只有在成功輸出後游標才會前進 — 不會遺漏訊息
+- 進化引擎：適應度追蹤 + 表觀遺傳提示 + 群組基因組 + 免疫系統
 
-For full architecture details see [docs/SPEC.md](docs/SPEC.md).
+完整架構細節請參閱 [docs/SPEC.md](docs/SPEC.md)。
 
 ---
 
-## Debugging
+## 除錯
 
-### Test the agent container directly
+### 直接測試代理容器
 
-**Linux / macOS:**
+**Linux / macOS：**
 ```bash
 echo '{"prompt":"hello"}' | docker run -i --rm evoclaw-agent
 ```
 
-**Windows (PowerShell):**
+**Windows（PowerShell）：**
 ```powershell
 '{"prompt":"hello"}' | docker run -i --rm evoclaw-agent
 ```
 
-Expected output:
+預期輸出：
 ```
 ---EVOCLAW_OUTPUT_START---
 {"status": "ok", "result": "Hello! ...", "error": null}
 ---EVOCLAW_OUTPUT_END---
 ```
 
-| Error | Cause | Fix |
-|-------|-------|-----|
-| `Invalid JSON input` | stdin encoding issue | Rebuild image after `git pull` |
-| `GOOGLE_API_KEY not set` | Missing API key | Add `GOOGLE_API_KEY` to `.env` |
-| `No such image: evoclaw-agent` | Image not built | Run `docker build -t evoclaw-agent container/` |
+| 錯誤訊息 | 原因 | 解決方式 |
+|---------|------|---------|
+| `Invalid JSON input` | stdin 編碼問題 | `git pull` 後重新建置映像檔 |
+| `GOOGLE_API_KEY not set` | 缺少 API 金鑰 | 在 `.env` 中加入 `GOOGLE_API_KEY` |
+| `No such image: evoclaw-agent` | 映像檔未建置 | 執行 `docker build -t evoclaw-agent container/` |
 
 ---
 
-## Security
+## 安全性
 
-- Agents run in Linux containers, not behind application-level permission checks
-- Each container only sees explicitly mounted directories
-- Bash access is safe because commands run inside the container, not on your host
-- Sender allowlist: restrict which users can invoke the agent (`~/.config/evoclaw/sender-allowlist.json`)
-- Mount allowlist: restrict which directories containers can access (`~/.config/evoclaw/mount-allowlist.json`)
-- **Immune System**: automatically detects prompt injection attacks, builds persistent threat memory, auto-blocks malicious senders
+- 代理在 Linux 容器中執行，不依賴應用層級的權限檢查
+- 每個容器只能看到明確掛載的目錄
+- 即使有 Bash 存取，命令也在容器內執行，不影響主機
+- 寄件者白名單：限制哪些用戶可以呼叫代理（`~/.config/evoclaw/sender-allowlist.json`）
+- 掛載白名單：限制容器可存取的目錄（`~/.config/evoclaw/mount-allowlist.json`）
+- **免疫系統**：自動偵測提示詞注入攻擊，建立持久威脅記憶，自動封鎖惡意寄件者
 
-See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
+完整安全模型請參閱 [docs/SECURITY.md](docs/SECURITY.md)。
 
 ---
 
 ## FAQ
 
-**Why Docker?**
+**為什麼用 Docker？**
 
-Docker provides cross-platform support (macOS, Linux, Windows via WSL2) and a mature ecosystem.
+Docker 提供跨平台支援（macOS、Linux、Windows via WSL2）和成熟的生態系統。
 
-**Can I run this on Linux?**
+**可以在 Linux 上執行嗎？**
 
-Yes. Docker works on both macOS and Linux.
+可以。Docker 在 macOS 和 Linux 上都能使用。
 
-**Can I use a different Gemini model?**
+**可以使用不同的 Gemini 模型嗎？**
 
-Yes. Set `GEMINI_MODEL` in your `.env`:
+可以。在 `.env` 中設定 `GEMINI_MODEL`：
 ```bash
 GEMINI_MODEL=gemini-2.0-flash-exp
 ```
 
-**How do I debug issues?**
+**如何除錯問題？**
 
-Ask the agent directly in your main channel: "Why isn't the scheduler running?" "What's in the recent logs?" "Why did this message not get a response?"
+直接在主頻道問代理：「為什麼排程器沒有執行？」「最近的日誌裡有什麼？」「為什麼這條訊息沒有得到回應？」
 
-**What's the difference between this and nanoclaw?**
+**這與 nanoclaw 有什麼不同？**
 
 | | nanoclaw | evoclaw |
 |--|---------|---------|
-| Language | TypeScript / Node.js | Python |
-| AI Backend | Claude (Anthropic) | Gemini 2.0 Flash (Google) |
-| Setup | Claude Code CLI | `python setup/setup.py` |
-| Channels | WhatsApp, Telegram, Discord, Slack, Gmail | Same |
-| Container | Apple Container / Docker | Docker |
+| 語言 | TypeScript / Node.js | Python |
+| AI 後端 | Claude（Anthropic） | Gemini 2.0 Flash（Google） |
+| 安裝方式 | Claude Code CLI | `python setup/setup.py` |
+| 支援頻道 | WhatsApp、Telegram、Discord、Slack、Gmail | 相同 |
+| 容器 | Apple Container / Docker | Docker |
 
 ---
 
-## Credits
+## 致謝
 
-- Built on [nanoclaw](https://github.com/qwibitai/nanoclaw) by qwibitai
-- Powered by [Google Gemini](https://ai.google.dev/) API
+- 基於 [nanoclaw](https://github.com/qwibitai/nanoclaw) by qwibitai
+- 由 [Google Gemini](https://ai.google.dev/) API 驅動
 
-## License
+## 授權
 
 MIT
