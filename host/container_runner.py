@@ -126,6 +126,16 @@ async def run_container_agent(
 
     # 將 API 金鑰等敏感資料包進 input_data，透過 stdin 傳給 container
     secrets = _read_secrets()
+    # 取得最近 2 小時的對話歷史（最多 30 則），提供給 agent 作為上下文記憶
+    history_cutoff = int((time.time() - 7200) * 1000)  # 2 hours ago
+    history_msgs = db.get_messages_since(jid, history_cutoff, limit=30)
+    conv_history = []
+    for m in history_msgs:
+        role = "assistant" if m.get("is_bot_message") else "user"
+        text = str(m.get("content") or "").strip()
+        if text:
+            conv_history.append({"role": role, "content": text[:800]})  # truncate long messages
+
     input_data = {
         "prompt": prompt,
         "sessionId": session_id,
@@ -136,6 +146,7 @@ async def run_container_agent(
         "assistantName": config.ASSISTANT_NAME,
         "secrets": secrets,  # API keys 等，container 內讀取後設定為 env vars
         "evolutionHints": evolution_hints,  # 演化引擎動態注入的行為指引
+        "conversationHistory": conv_history,  # 最近的對話歷史，提供記憶能力
     }
     input_json = json.dumps(input_data, ensure_ascii=True)
     # 記錄 container 啟動時間，用於計算回應時間（適應度追蹤）
