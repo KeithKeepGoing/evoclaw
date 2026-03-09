@@ -9,15 +9,7 @@
 
 <p align="center">
   <a href="README_en.md">English</a>&nbsp; • &nbsp;
-  <a href="README_zh.md">完整中文文件</a>&nbsp; • &nbsp;
   <a href="https://github.com/KeithKeepGoing/evoclaw">GitHub</a>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.11+-blue?logo=python" alt="Python">
-  <img src="https://img.shields.io/badge/AI-Google%20Gemini-4285F4?logo=google" alt="Gemini">
-  <img src="https://img.shields.io/badge/Container-Docker-2496ED?logo=docker" alt="Docker">
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT">
 </p>
 
 Fork 自 [nanoclaw](https://github.com/qwibitai/nanoclaw) — 完全以 Python 重寫，使用 Google Gemini API。
@@ -303,11 +295,11 @@ echo '{"prompt":"hello"}' | docker run -i --rm evoclaw-agent
 ---EVOCLAW_OUTPUT_END---
 ```
 
-| 錯誤訊息 | 原因 | 解決方式 |
-|---------|------|---------|
-| `Invalid JSON input` | stdin 編碼問題 | `git pull` 後重新建置映像檔 |
+| 錯誤 | 原因 | 解決方式 |
+|------|------|---------|
+| `Invalid JSON input` | stdin 編碼問題 | `git pull` 後重建映像 |
 | `GOOGLE_API_KEY not set` | 缺少 API 金鑰 | 在 `.env` 中加入 `GOOGLE_API_KEY` |
-| `No such image: evoclaw-agent` | 映像檔未建置 | 執行 `docker build -t evoclaw-agent container/` |
+| `No such image: evoclaw-agent` | 映像未建置 | 執行 `docker build -t evoclaw-agent container/` |
 
 ---
 
