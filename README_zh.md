@@ -289,13 +289,6 @@ echo '{"prompt":"hello"}' | docker run -i --rm evoclaw-agent
 ```
 **Windows（PowerShell）— 完整參數：**
 ```powershell
-$json = '{"prompt":"說你好","secrets":{"GOOGLE_API_KEY":"API Key"},"groupFolder":"test","chatJid":"tg:123","isMain":false,"isScheduledTask":false,"assistantName":"Evo","evolutionHints":""}'
-$json | docker run -i --rm evoclaw-agent
-```
-
-
-**Windows（PowerShell）— 完整參數：**
-```powershell
 $json = '{"prompt":"說你好","secrets":{"GOOGLE_API_KEY":"你的API金鑰"},"groupFolder":"test","chatJid":"tg:123","isMain":false,"isScheduledTask":false,"assistantName":"Evo","evolutionHints":""}'
 $json | docker run -i --rm evoclaw-agent
 ```
