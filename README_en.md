@@ -196,6 +196,7 @@ evoclaw/
 │   ├── task_scheduler.py         ← Scheduled tasks
 │   ├── allowlist.py              ← Sender/mount allowlists
 │   ├── dashboard.py              ← Web dashboard (port 8765)
+│   ├── log_buffer.py             ← In-memory log ring buffer (SSE stream source)
 │   ├── webportal.py              ← Browser chat interface (port 8766)
 │   ├── requirements.txt          ← Python dependencies
 │   ├── evolution/                ← 🧬 Evolution Engine
@@ -227,14 +228,24 @@ evoclaw/
 
 ### Web Dashboard (port 8765)
 
-`host/dashboard.py` — a dark-theme monitoring dashboard built entirely from the Python stdlib, no extra dependencies required.
+`host/dashboard.py` — a single-page application (SPA) monitoring dashboard built entirely from the Python stdlib, no extra dependencies required.
 
-Features:
-- 9 sections: Groups, Scheduled Tasks, Task Run Logs, Sessions, Messages, Evolution Stats, Evolution Log, Immune Threats
+**6 sidebar tabs:**
+
+| Tab | Features |
+|-----|----------|
+| 📊 Status | Container status, active agents, memory usage, session stats, health checks, immune threats |
+| 📋 Logs | SSE real-time log stream, level filter (DEBUG/INFO/WARNING/ERROR), pause/resume |
+| 🤖 Management | Stop containers, scheduled task CRUD (cancel/update), task run logs |
+| ⚙️ Settings | `.env` viewer & editor (sensitive fields auto-masked), CLAUDE.md multi-file editor |
+| 💬 Messages | Full conversation history (user + bot replies), filterable by group |
+| 🧬 Evolution | Group genome stats, evolution log (last 30 events) |
+
+Additional:
 - HTTP Basic Auth via `DASHBOARD_USER` / `DASHBOARD_PASSWORD` env vars
 - `/health` endpoint — checks DB + Docker, returns JSON 200/503
 - `/metrics` endpoint — Prometheus-format row counts
-- Auto-refresh every 10 seconds
+- Log streaming via SSE (Server-Sent Events), 0.5s update interval
 
 Environment variables:
 ```

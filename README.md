@@ -196,6 +196,7 @@ evoclaw/
 │   ├── task_scheduler.py         ← 排程任務
 │   ├── allowlist.py              ← 寄件者/掛載白名單
 │   ├── dashboard.py              ← Web 儀表板（port 8765）
+│   ├── log_buffer.py             ← 即時日誌環形緩衝區（供 Dashboard SSE 使用）
 │   ├── webportal.py              ← 瀏覽器聊天介面（port 8766）
 │   ├── requirements.txt          ← Python 依賴
 │   ├── evolution/                ← 🧬 進化引擎
@@ -227,14 +228,24 @@ evoclaw/
 
 ### Web 儀表板（port 8765）
 
-`host/dashboard.py` 提供純 Python stdlib 實作的深色主題監控儀表板，無需額外依賴。
+`host/dashboard.py` 提供純 Python stdlib 實作的單頁應用程式（SPA）監控儀表板，無需額外依賴。
 
-功能：
-- 9 個資訊區塊：群組、排程任務、任務執行日誌、工作階段、訊息、進化統計、演化歷程日誌、免疫威脅
-- HTTP Basic Auth（環境變數：`DASHBOARD_USER`、`DASHBOARD_PASSWORD`）
-- `/health` 端點 — 檢查 DB + Docker，返回 JSON 200/503
-- `/metrics` 端點 — Prometheus 格式的資料列計數
-- 每 10 秒自動刷新
+**6 個側邊欄分頁：**
+
+| 分頁 | 功能 |
+|------|------|
+| 📊 狀態監控 | Container 狀態、Active Agent、記憶體用量、Session 統計、健康檢查、免疫威脅 |
+| 📋 日誌查看 | SSE 即時日誌串流、等級過濾（DEBUG/INFO/WARNING/ERROR）、暫停/繼續 |
+| 🤖 Agent 管理 | 停止 Container、排程任務 CRUD（取消/更新排程）、任務執行日誌 |
+| ⚙️ 系統設定 | `.env` 查看與編輯（敏感欄位自動遮罩）、CLAUDE.md 多檔編輯器 |
+| 💬 對話訊息 | 完整對話紀錄（用戶 + Bot 回覆），可依群組篩選 |
+| 🧬 進化引擎 | 群組基因組統計、演化歷程日誌（最近 30 筆） |
+
+其他功能：
+- HTTP Basic Auth（`DASHBOARD_USER`、`DASHBOARD_PASSWORD`）
+- `/health` — 檢查 DB + Docker，返回 JSON 200/503
+- `/metrics` — Prometheus 格式資料列計數
+- 日誌串流透過 SSE（Server-Sent Events）推送，0.5 秒更新間隔
 
 環境變數：
 ```
