@@ -5,6 +5,16 @@
 格式基於 [Keep a Changelog](https://keepachangelog.com/)，
 版本號遵循 [語意化版本](https://semver.org/)。
 
+## [1.4.3] — 2026-03-10
+
+### Features
+
+- **Subagent 親子關係追蹤**：`container_runner.py` 新增 `parent_container` 欄位，記錄每個 container 的父 container 名稱（`None` = 主 agent，有值 = subagent）。
+- **即時 Container 活動狀態**：`container_runner.py` 新增 `current_activity` 欄位，非 Windows 路徑改用串流 stderr（逐行讀取 `_log()` 輸出），即時更新 dashboard 顯示 agent 正在執行的動作。
+- **Dashboard 容器層級顯示**：`dashboard.py` 的「Active Agent Containers」表格新增 Activity 欄位、按親子關係排序（主 agent 在上，subagent 以 ↳ 縮排在其下），並以不同徽章顏色區分 subagent（黃色）/ scheduled（紫色）/ message（藍色）。
+
+---
+
 ## [1.4.2] — 2026-03-10
 
 ### Bug Fixes

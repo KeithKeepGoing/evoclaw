@@ -172,12 +172,38 @@ async def _handle_ipc(payload: dict, group_folder: str, is_main: bool, route_fn:
         prompt = payload.get("prompt", "")
         context_mode = payload.get("context_mode", "isolated")
         if request_id and prompt:
-            _asyncio.ensure_future(_run_subagent(request_id, prompt, context_mode, group_folder))
+            # 找出目前正在執行此群組的父 container（用於 dashboard 親子關係顯示）
+            parent_name = _find_parent_container(group_folder)
+            _asyncio.ensure_future(_run_subagent(request_id, prompt, context_mode, group_folder, parent_name))
 
-async def _run_subagent(request_id: str, prompt: str, context_mode: str, group_folder: str) -> None:
+def _find_parent_container(group_folder: str) -> str | None:
+    """
+    找出目前正在為此群組執行的主 container 名稱（用於 subagent 親子關係追蹤）。
+    回傳最早啟動的非 subagent container（parent_container is None）。
+    """
+    try:
+        from .container_runner import _active_containers, _active_lock
+        with _active_lock:
+            candidates = [
+                info for info in _active_containers.values()
+                if info.get("folder") == group_folder and info.get("parent_container") is None
+            ]
+        if candidates:
+            # 取最早啟動的（started_at 最小）
+            return min(candidates, key=lambda x: x["started_at"])["name"]
+    except Exception:
+        pass
+    return None
+
+
+async def _run_subagent(
+    request_id: str, prompt: str, context_mode: str, group_folder: str,
+    parent_container: str | None = None,
+) -> None:
     """
     在獨立 Docker container 中執行子 agent，並將結果寫入 results 目錄。
     父 agent 透過輪詢此目錄來取得子 agent 的輸出。
+    parent_container 用於 dashboard 顯示親子關係。
     """
     from .container_runner import run_container_agent
     result_dir = config.DATA_DIR / "ipc" / group_folder / "results"
@@ -194,6 +220,7 @@ async def _run_subagent(request_id: str, prompt: str, context_mode: str, group_f
                 group=group,
                 prompt=prompt,
                 conversation_history=conv_history,
+                parent_container=parent_container,
             )
             result_text = result.get("result") or result.get("error") or "(no output)"
         output_file.write_text(

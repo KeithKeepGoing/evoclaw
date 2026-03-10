@@ -98,6 +98,13 @@ def _safe_name(folder: str) -> str:
     """將 folder 名稱轉換為合法的 Docker container 名稱（底線換連字號，截斷過長部分）。"""
     return folder.replace("_", "-")[:40]
 
+async def update_container_activity(container_name: str, activity: str) -> None:
+    """Update the current_activity field for a running container (called from stderr stream)."""
+    with _active_lock:
+        if container_name in _active_containers:
+            _active_containers[container_name]["current_activity"] = activity
+
+
 async def run_container_agent(
     group: dict,
     prompt: str,
@@ -106,6 +113,7 @@ async def run_container_agent(
     is_scheduled_task: bool = False,
     on_success: Optional[Callable[[], Awaitable[None]]] = None,
     conversation_history: list | None = None,
+    parent_container: Optional[str] = None,
 ) -> dict:
     """
     在獨立的 Docker container 中執行 agent，並等待結果。
@@ -176,6 +184,8 @@ async def run_container_agent(
             "run_id": run_id,
             "started_at": int(t0 * 1000),
             "is_scheduled": is_scheduled_task,
+            "parent_container": parent_container,   # None = 主 agent，str = subagent
+            "current_activity": "starting...",      # 即時 stderr 活動狀態
         }
 
     # 讓 container 以 host 的 UID/GID 執行，確保寫入 volume 的檔案有正確的擁有者
@@ -227,8 +237,37 @@ async def run_container_agent(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+            # ── 串流 stderr（即時顯示 container 活動狀態）─────────────────────
+            # 將 stdin 寫入後立即關閉，然後並行收集 stdout 與串流 stderr，
+            # 讓 dashboard 和 Docker Desktop 都能即時看到 _log() 輸出。
+            proc.stdin.write(input_bytes)
+            await proc.stdin.drain()
+            proc.stdin.close()
+
+            stderr_lines: list[str] = []
+
+            async def _stream_stderr() -> None:
+                """逐行讀取 stderr 並更新 current_activity + log_buffer。"""
+                assert proc.stderr is not None
+                while True:
+                    line_bytes = await proc.stderr.readline()
+                    if not line_bytes:
+                        break
+                    line = line_bytes.decode(errors="replace").rstrip()
+                    if line:
+                        stderr_lines.append(line)
+                        log.debug("[container:%s] %s", container_name, line)
+                        with _active_lock:
+                            if container_name in _active_containers:
+                                _active_containers[container_name]["current_activity"] = line
+
+            async def _collect() -> tuple[bytes, bytes]:
+                stdout_data = await proc.stdout.read()
+                await _stream_stderr()
+                return stdout_data, b"\n".join(l.encode() for l in stderr_lines)
+
             stdout_data, stderr_data = await asyncio.wait_for(
-                proc.communicate(input_bytes),
+                _collect(),
                 timeout=config.CONTAINER_TIMEOUT,
             )
 

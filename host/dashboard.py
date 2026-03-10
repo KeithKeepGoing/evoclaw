@@ -273,18 +273,32 @@ async function loadStatus() {
   }
   html += '</div>';
 
-  // Active agents
+  // Active agents — with parent-child hierarchy and real-time activity
   html += '<div class="card"><h3>🐳 Active Agent Containers</h3>';
   if (agents && agents.length > 0) {
-    html += '<table><thead><tr><th>Container</th><th>Group</th><th>JID</th><th>Started</th><th>Type</th></tr></thead><tbody>';
-    for (const a of agents) {
+    // Sort: primary agents first, then subagents grouped under their parent
+    const primary = agents.filter(a => !a.parent_container);
+    const subs = agents.filter(a => a.parent_container);
+    const sorted = [];
+    for (const p of primary) { sorted.push(p); sorted.push(...subs.filter(s => s.parent_container === p.name)); }
+    // Any orphan subagents (parent already exited) at the end
+    sorted.push(...subs.filter(s => !primary.find(p => p.name === s.parent_container)));
+
+    html += '<table><thead><tr><th>Container</th><th>Group</th><th>Type</th><th>Running</th><th>Activity</th></tr></thead><tbody>';
+    for (const a of sorted) {
       const elapsed = Math.round((Date.now()-a.started_at)/1000);
-      html += `<tr>
-        <td><code style="font-size:10px">${esc(a.name)}</code></td>
+      const isSubagent = !!a.parent_container;
+      const indent = isSubagent ? '&nbsp;&nbsp;↳&nbsp;' : '';
+      const typeLabel = isSubagent ? 'subagent' : (a.is_scheduled ? 'scheduled' : 'message');
+      const typeColor = isSubagent ? 'yellow' : (a.is_scheduled ? 'purple' : 'blue');
+      const activity = a.current_activity || '...';
+      const activityStyle = 'font-size:10px;color:#9ca3af;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      html += `<tr${isSubagent ? ' style="background:#1a1a28"' : ''}>
+        <td><span style="color:#4b5563">${indent}</span><code style="font-size:10px">${esc(a.name.replace('evoclaw-',''))}</code></td>
         <td>${esc(a.folder)}</td>
-        <td style="font-size:10px">${esc(a.jid)}</td>
-        <td>${elapsed}s ago</td>
-        <td>${a.is_scheduled ? badge('scheduled','purple') : badge('message','blue')}</td>
+        <td>${badge(typeLabel,typeColor)}</td>
+        <td>${elapsed}s</td>
+        <td style="${activityStyle}" title="${esc(activity)}">${esc(activity)}</td>
       </tr>`;
     }
     html += '</tbody></table>';
