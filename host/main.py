@@ -157,6 +157,21 @@ async def _process_group_messages(group: dict, messages: list[dict],
     async def on_output(text: str):
         # 將 container 的回覆透過 router 發送回對應的聊天室
         await route_outbound(jid, text)
+        # Store bot response in DB so dashboard can show full conversation
+        try:
+            ts = int(time.time() * 1000)
+            msg_id = str(uuid.uuid4())
+            db.store_message(
+                msg_id, jid,
+                sender="bot",
+                sender_name=config.ASSISTANT_NAME,
+                content=text,
+                timestamp=ts,
+                is_from_me=True,
+                is_bot_message=True,
+            )
+        except Exception:
+            pass
 
     await run_container_agent(
         group=group,
@@ -239,6 +254,21 @@ async def _ipc_route_fn(jid: str, text: str, sender: str | None = None) -> None:
     try:
         from .webportal import deliver_reply
         deliver_reply(jid, text)
+    except Exception:
+        pass
+    # Store bot response (from scheduled tasks / IPC) in DB
+    try:
+        ts = int(time.time() * 1000)
+        msg_id = str(uuid.uuid4())
+        db.store_message(
+            msg_id, jid,
+            sender="bot",
+            sender_name=config.ASSISTANT_NAME,
+            content=text,
+            timestamp=ts,
+            is_from_me=True,
+            is_bot_message=True,
+        )
     except Exception:
         pass
 
