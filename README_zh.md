@@ -376,6 +376,12 @@ $json | docker run -i --rm evoclaw-agent
 | `GOOGLE_API_KEY not set` | 缺少 API 金鑰 | 在 `.env` 中加入 `GOOGLE_API_KEY` |
 | `No such image: evoclaw-agent` | 映像未建置 | 執行 `docker build -t evoclaw-agent container/` |
 
+### Docker Desktop 容器日誌即時顯示
+
+EvoClaw 的 agent 容器使用 `-i`（無 TTY）模式執行，Python 預設會緩衝 stdout，導致 Docker Desktop 的日誌介面在容器執行中看不到任何輸出。
+
+`PYTHONUNBUFFERED=1` 環境變數（已內建於 `container_runner.py`）可強制 Python 立即 flush 每一行輸出，讓 Docker Desktop 的日誌介面能顯示即時內容。
+
 ---
 
 ## 安全性

@@ -387,6 +387,12 @@ Expected output:
 | `GOOGLE_API_KEY not set` | Missing API key | Add `GOOGLE_API_KEY` to `.env` |
 | `No such image: evoclaw-agent` | Image not built | Run `docker build -t evoclaw-agent container/` |
 
+### Real-time logs in Docker Desktop
+
+EvoClaw agent containers run with `-i` (no TTY). Python buffers stdout by default in this mode, which means Docker Desktop's log view shows nothing while the container is running.
+
+`PYTHONUNBUFFERED=1` (built into `container_runner.py`) forces Python to flush output immediately, so Docker Desktop displays logs in real time.
+
 ---
 
 ## Security

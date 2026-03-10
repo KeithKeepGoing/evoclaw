@@ -189,6 +189,7 @@ async def run_container_agent(
         "--rm",    # container 結束後自動刪除，避免殘留
         "--name", container_name,
         "-e", f"TZ={config.TIMEZONE}",  # 時區設定，確保 agent 顯示正確時間
+        "-e", "PYTHONUNBUFFERED=1",  # 強制 Python stdout 立即 flush，讓 Docker Desktop 日誌即時顯示
     ]
     if uid is not None and gid is not None:
         cmd += ["--user", f"{uid}:{gid}"]

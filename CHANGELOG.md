@@ -5,6 +5,14 @@
 格式基於 [Keep a Changelog](https://keepachangelog.com/)，
 版本號遵循 [語意化版本](https://semver.org/)。
 
+## [1.4.1] — 2026-03-10
+
+### Bug Fixes
+
+- **Docker Desktop 日誌顯示修正**：`container_runner.py` 新增 `-e PYTHONUNBUFFERED=1` 至 docker run 指令。修正在無 TTY 模式（`-i`）下 Python stdout 緩衝導致 Docker Desktop 日誌介面無法即時顯示 container 輸出的問題。
+
+---
+
 ## [1.6.0] - 2026-03-10
 
 ### Added

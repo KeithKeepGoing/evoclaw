@@ -1,3 +1,26 @@
+## v1.4.1 — 2026-03-10
+
+> Docker Desktop 日誌即時顯示修正
+
+### 修正內容
+
+**Docker Desktop container log 看不到輸出**
+
+`docker run -i`（無 TTY）模式下，Python stdout 預設為完全緩衝，container 執行過程中 Docker Desktop 日誌介面顯示空白。
+
+加入 `PYTHONUNBUFFERED=1` 環境變數後，Python 每行輸出立即 flush，Docker Desktop 可即時看到 container 執行狀態。
+
+### 升級方式
+
+```bash
+git pull
+python run.py
+```
+
+不需要重建 Docker image（此為 host 端設定，透過環境變數傳入 container）。
+
+---
+
 ## v1.6.0 — Subagent Support
 
 ### What's New
