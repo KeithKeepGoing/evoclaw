@@ -516,13 +516,97 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        # Check password if configured
+        if config.DASHBOARD_PASSWORD:
+            import base64
+            auth = self.headers.get("Authorization", "")
+            if auth.startswith("Basic "):
+                try:
+                    decoded = base64.b64decode(auth[6:]).decode("utf-8")
+                    user, pw = decoded.split(":", 1)
+                    if user != config.DASHBOARD_USER or pw != config.DASHBOARD_PASSWORD:
+                        self._send_auth_required()
+                        return
+                except Exception:
+                    self._send_auth_required()
+                    return
+            else:
+                self._send_auth_required()
+                return
+
         if self.path == "/api/status":
             self._serve_json()
         elif self.path in ("/", "/index.html"):
             self._serve_html()
+        elif self.path == "/health":
+            self._handle_health()
+        elif self.path == "/metrics":
+            self._handle_metrics()
         else:
             self.send_response(404)
             self.end_headers()
+
+    def _send_auth_required(self):
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="EvoClaw Dashboard"')
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Authentication required")
+
+    def _handle_health(self):
+        import sqlite3, time
+        health = {"status": "ok", "checks": {}}
+        # Check DB
+        try:
+            db_path = config.STORE_DIR / "messages.db"
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+            conn.execute("SELECT 1").fetchone()
+            conn.close()
+            health["checks"]["database"] = "ok"
+        except Exception as e:
+            health["checks"]["database"] = f"error: {e}"
+            health["status"] = "degraded"
+        # Check Docker
+        import subprocess
+        try:
+            r = subprocess.run(["docker", "info"], capture_output=True, timeout=3)
+            health["checks"]["docker"] = "ok" if r.returncode == 0 else "error"
+            if r.returncode != 0:
+                health["status"] = "degraded"
+        except Exception:
+            health["checks"]["docker"] = "unavailable"
+
+        status_code = 200 if health["status"] == "ok" else 503
+        body = json.dumps(health, indent=2).encode()
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_metrics(self):
+        """Prometheus-style metrics."""
+        import sqlite3
+        lines = []
+        try:
+            db_path = config.STORE_DIR / "messages.db"
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+            tables = ["messages", "scheduled_tasks", "registered_groups", "sessions", "evolution_runs", "immune_threats"]
+            for t in tables:
+                try:
+                    count = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                    lines.append(f'evoclaw_{t}_total {count}')
+                except Exception:
+                    pass
+            conn.close()
+        except Exception:
+            pass
+        body = "\n".join(lines).encode() + b"\n"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; version=0.0.4")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _serve_json(self):
         data = _get_api_status()

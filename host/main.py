@@ -236,6 +236,11 @@ async def _message_loop() -> None:
 async def _ipc_route_fn(jid: str, text: str, sender: str | None = None) -> None:
     """IPC watcher 的路由回呼：將 container 發出的訊息轉發到對應聊天室。"""
     await route_outbound(jid, text)
+    try:
+        from .webportal import deliver_reply
+        deliver_reply(jid, text)
+    except Exception:
+        pass
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────
@@ -263,6 +268,8 @@ async def main() -> None:
 
     # 啟動 Web dashboard（背景 daemon thread，port DASHBOARD_PORT）
     start_dashboard(_stop_event)
+    from .webportal import start_webportal, deliver_reply as _portal_deliver
+    start_webportal()
     _cleanup_orphan_tasks()  # ← add this line
 
     # 從設定檔載入允許傳訊的發送者白名單

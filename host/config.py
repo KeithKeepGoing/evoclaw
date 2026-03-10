@@ -61,6 +61,12 @@ WHATSAPP_WEBHOOK_PORT = _env_int("WHATSAPP_WEBHOOK_PORT", 8080)
 
 # Dashboard
 DASHBOARD_PORT = _env_int("DASHBOARD_PORT", 8765)
+DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")  # If set, enables HTTP Basic Auth
+DASHBOARD_USER = os.environ.get("DASHBOARD_USER", "admin")
+WEBPORTAL_ENABLED = os.environ.get("WEBPORTAL_ENABLED", "false").lower() == "true"
+WEBPORTAL_PORT = _env_int("WEBPORTAL_PORT", 8766)
+WEBPORTAL_HOST = os.environ.get("WEBPORTAL_HOST", "127.0.0.1")
+HEALTH_PORT = _env_int("HEALTH_PORT", 8767)
 
 # Channels to load (comma-separated, default: telegram)
 ENABLED_CHANNELS = [c.strip() for c in os.environ.get("ENABLED_CHANNELS", "telegram").split(",")]
