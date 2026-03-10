@@ -195,6 +195,8 @@ evoclaw/
 │   ├── ipc_watcher.py            ← Agent↔Host IPC
 │   ├── task_scheduler.py         ← Scheduled tasks
 │   ├── allowlist.py              ← Sender/mount allowlists
+│   ├── dashboard.py              ← Web dashboard (port 8765)
+│   ├── webportal.py              ← Browser chat interface (port 8766)
 │   ├── requirements.txt          ← Python dependencies
 │   ├── evolution/                ← 🧬 Evolution Engine
 │   │   ├── fitness.py            ←   Fitness tracking (natural selection)
@@ -221,11 +223,60 @@ evoclaw/
 
 ---
 
+## Web Interfaces
+
+### Web Dashboard (port 8765)
+
+`host/dashboard.py` — a dark-theme monitoring dashboard built entirely from the Python stdlib, no extra dependencies required.
+
+Features:
+- 9 sections: Groups, Scheduled Tasks, Task Run Logs, Sessions, Messages, Evolution Stats, Evolution Log, Immune Threats
+- HTTP Basic Auth via `DASHBOARD_USER` / `DASHBOARD_PASSWORD` env vars
+- `/health` endpoint — checks DB + Docker, returns JSON 200/503
+- `/metrics` endpoint — Prometheus-format row counts
+- Auto-refresh every 10 seconds
+
+Environment variables:
+```
+DASHBOARD_PORT=8765        # Dashboard port
+DASHBOARD_USER=admin       # Basic Auth username
+DASHBOARD_PASSWORD=        # Basic Auth password (empty = no auth)
+```
+
+### Web Portal (port 8766)
+
+`host/webportal.py` — a browser-based chat interface using polling (no WebSocket dependency).
+
+Features:
+- Group selector, scrollable chat view, 1-second polling
+- `deliver_reply()` function for pushing bot responses to the browser
+
+Environment variables:
+```
+WEBPORTAL_ENABLED=false    # Enable browser chat interface
+WEBPORTAL_PORT=8766        # Web portal port
+WEBPORTAL_HOST=127.0.0.1  # Web portal bind host
+```
+
+---
+
+## Scheduled Tasks
+
+Agents can manage scheduled tasks using the following tools:
+
+- `schedule_task` — create cron, interval, or one-time tasks
+- `list_tasks` — list tasks for the current group (or all groups from the main channel)
+- `cancel_task(task_id)` — cancel a specific task
+
+Task status field values: `active`, `error` (group not found), `cancelled`. Orphan tasks with an empty `chat_jid` are automatically cleaned up on startup.
+
+---
+
 ## Evolution Engine
 
 EvoClaw ships with a bio-inspired self-adaptation system. The assistant automatically improves over time without manual tuning.
 
-### 🧬 Four Mechanisms
+### 🧬 Five Mechanisms
 
 **① Fitness Tracking (Natural Selection)**
 Every AI response records performance metrics (response time, success rate, retry count), computing a 0.0–1.0 fitness score as the basis for all evolutionary decisions.
@@ -243,6 +294,9 @@ An Evolution Daemon runs every 24 hours, analyzing usage data and adjusting each
 **④ Immune System**
 Automatically detects prompt injection attacks ("ignore previous instructions") and spam flooding. Builds persistent immune memory — accumulated threats trigger automatic sender blocking with no human intervention needed.
 
+**⑤ Evolution Process Logging**
+Every evolution event is recorded in the `evolution_log` DB table with a full before/after genome snapshot. Event types: `genome_evolved`, `genome_unchanged`, `cycle_start`, `cycle_end`, `skipped_low_samples`. The dashboard shows the last 30 events with color-coded event types.
+
 ```
 Message received
     ↓ Immune check (injection / spam detection)
@@ -252,7 +306,7 @@ Container starts (with evolution hints injected)
     ↓ AI responds
 Fitness score recorded
     ↓ Every 24h
-Evolution Daemon adjusts group genome
+Evolution Daemon adjusts group genome → logged to evolution_log
 ```
 
 ---
@@ -268,7 +322,9 @@ Telegram / WhatsApp / Discord / Slack / Gmail
            ├── GroupQueue (one container per group, global concurrency limit)
            ├── IPC watcher (agent → host messages)
            ├── Task scheduler (cron / interval / once)
-           └── Evolution Daemon (24h evolution cycle)
+           ├── Evolution Daemon (24h evolution cycle)
+           ├── Web Dashboard (port 8765, /health, /metrics)
+           └── Web Portal (port 8766, browser chat)
                     ↓ spawns (with evolution hints)
            Docker Container (isolated per group)
                     ↓ runs

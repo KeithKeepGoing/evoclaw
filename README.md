@@ -195,6 +195,8 @@ evoclaw/
 │   ├── ipc_watcher.py            ← 代理↔主機 IPC
 │   ├── task_scheduler.py         ← 排程任務
 │   ├── allowlist.py              ← 寄件者/掛載白名單
+│   ├── dashboard.py              ← Web 儀表板（port 8765）
+│   ├── webportal.py              ← 瀏覽器聊天介面（port 8766）
 │   ├── requirements.txt          ← Python 依賴
 │   ├── evolution/                ← 🧬 進化引擎
 │   │   ├── fitness.py            ←   適應度追蹤（自然選擇）
@@ -221,6 +223,43 @@ evoclaw/
 
 ---
 
+## Web 介面
+
+### Web 儀表板（port 8765）
+
+`host/dashboard.py` 提供純 Python stdlib 實作的深色主題監控儀表板，無需額外依賴。
+
+功能：
+- 9 個資訊區塊：群組、排程任務、任務執行日誌、工作階段、訊息、進化統計、演化歷程日誌、免疫威脅
+- HTTP Basic Auth（環境變數：`DASHBOARD_USER`、`DASHBOARD_PASSWORD`）
+- `/health` 端點 — 檢查 DB + Docker，返回 JSON 200/503
+- `/metrics` 端點 — Prometheus 格式的資料列計數
+- 每 10 秒自動刷新
+
+環境變數：
+```
+DASHBOARD_PORT=8765        # 儀表板連接埠
+DASHBOARD_USER=admin       # Basic Auth 用戶名
+DASHBOARD_PASSWORD=        # Basic Auth 密碼（空白 = 不需驗證）
+```
+
+### Web Portal（port 8766）
+
+`host/webportal.py` 提供瀏覽器聊天介面，支援輪詢方式（無 WebSocket 依賴）。
+
+功能：
+- 群組選擇器、可捲動聊天視窗、1 秒輪詢
+- `deliver_reply()` 函數將機器人回應推送至瀏覽器
+
+環境變數：
+```
+WEBPORTAL_ENABLED=false    # 啟用瀏覽器聊天介面
+WEBPORTAL_PORT=8766        # Web Portal 連接埠
+WEBPORTAL_HOST=127.0.0.1  # Web Portal 綁定主機
+```
+
+---
+
 ## 進化引擎
 
 EvoClaw 內建受生物學啟發的自我適應系統，助手會隨著時間自動改進，無需手動調整。
@@ -243,6 +282,9 @@ EvoClaw 內建受生物學啟發的自我適應系統，助手會隨著時間自
 **④ 免疫系統**
 自動偵測提示詞注入攻擊（「忽略之前的指令」）和垃圾訊息洪水。建立持久的免疫記憶 — 累積的威脅會觸發自動封鎖寄件者，無需人工介入。
 
+**⑤ 演化歷程日誌**
+每次進化事件都完整記錄於 `evolution_log` 資料表，包含進化前後的基因組快照。事件類型：`genome_evolved`、`genome_unchanged`、`cycle_start`、`cycle_end`、`skipped_low_samples`。
+
 ```
 收到訊息
     ↓ 免疫檢查（注入/垃圾訊息偵測）
@@ -252,7 +294,7 @@ EvoClaw 內建受生物學啟發的自我適應系統，助手會隨著時間自
     ↓ AI 回應
 記錄適應度分數
     ↓ 每 24 小時
-進化守護程式調整群組基因組
+進化守護程式調整群組基因組 → 記錄至 evolution_log
 ```
 
 ---
@@ -268,7 +310,9 @@ Telegram / WhatsApp / Discord / Slack / Gmail
            ├── GroupQueue（每群組一個容器，全局並發限制）
            ├── IPC 監視器（代理 → 主機訊息）
            ├── 排程器（cron / 間隔 / 一次性）
-           └── 進化守護程式（24 小時進化週期）
+           ├── 進化守護程式（24 小時進化週期）
+           ├── Web 儀表板（port 8765，/health，/metrics）
+           └── Web Portal（port 8766，瀏覽器聊天）
                     ↓ 產生（注入進化提示）
            Docker 容器（每群組獨立隔離）
                     ↓ 執行

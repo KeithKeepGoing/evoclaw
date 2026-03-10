@@ -81,6 +81,9 @@ A personal Claude assistant with multi-channel support, persistent memory per co
 | Agent | @google/genai (0.2.29) | Run Claude with tools and MCP servers |
 | Browser Automation | agent-browser + Chromium | Web interaction and screenshots |
 | Runtime | Node.js 20+ | Host process for routing and scheduling |
+| Web Dashboard | `host/dashboard.py` (Python stdlib) | Dark-theme monitoring dashboard, port 8765 |
+| Web Portal | `host/webportal.py` (Python stdlib) | Browser chat interface, port 8766 |
+| Evolution Logger | `host/evolution/` + `evolution_log` table | Records every evolution event with genome snapshots |
 
 ---
 
@@ -306,7 +309,7 @@ evoclaw/
 │
 ├── store/                         # Local data (gitignored)
 │   ├── auth/                      # WhatsApp authentication state
-│   └── messages.db                # SQLite database (messages, chats, scheduled_tasks, task_run_logs, registered_groups, sessions, router_state)
+│   └── messages.db                # SQLite database (messages, chats, scheduled_tasks, task_run_logs, registered_groups, sessions, router_state, evolution_log)
 │
 ├── data/                          # Application state (gitignored)
 │   ├── sessions/                  # Per-group session data (.claude/ dirs with JSONL transcripts)
@@ -614,6 +617,96 @@ From main channel:
 
 ---
 
+## Evolution Engine
+
+EvoClaw ships with a bio-inspired self-adaptation system in `host/evolution/`.
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `host/evolution/fitness.py` | Fitness tracking — records response time, success rate, retry count per response |
+| `host/evolution/adaptive.py` | Epigenetic hints — computes environment-driven behavior modifiers (load, time-of-day, day-of-week) |
+| `host/evolution/genome.py` | Group genome — per-group behavioral parameters (response style, formality, technical depth) |
+| `host/evolution/immune.py` | Immune system — detects prompt injection and spam, builds persistent threat memory |
+| `host/evolution/daemon.py` | Evolution Daemon — 24-hour cycle that analyses fitness data and adjusts group genomes |
+
+### Database: evolution_log Table
+
+Every evolution event is recorded in the `evolution_log` table:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Primary key |
+| `event_type` | TEXT | One of: `genome_evolved`, `genome_unchanged`, `cycle_start`, `cycle_end`, `skipped_low_samples` |
+| `group_folder` | TEXT | The group this event applies to |
+| `timestamp` | TEXT | ISO timestamp |
+| `genome_before` | TEXT (JSON) | Genome snapshot before the evolution step |
+| `genome_after` | TEXT (JSON) | Genome snapshot after the evolution step |
+| `details` | TEXT (JSON) | Additional event metadata |
+
+The dashboard shows the last 30 events with color-coded event types.
+
+### Scheduled Task Status
+
+Scheduled tasks now have a `status` column:
+
+| Value | Meaning |
+|-------|---------|
+| `active` | Task is running normally |
+| `error` | Group not found — task will not retry until fixed |
+| `cancelled` | Task has been cancelled by agent or user |
+
+Orphan tasks (tasks with an empty `chat_jid`) are automatically deleted on startup.
+
+---
+
+## Web Interfaces
+
+### Web Dashboard
+
+**File:** `host/dashboard.py`
+**Default port:** 8765 (env: `DASHBOARD_PORT`)
+
+A dark-theme monitoring dashboard built from the Python standard library — no external dependencies.
+
+Sections:
+- Groups, Scheduled Tasks, Task Run Logs, Sessions, Messages, Evolution Stats, Evolution Log, Immune Threats
+
+Endpoints:
+- `/` — Main dashboard (auto-refreshes every 10 seconds)
+- `/health` — JSON health check (DB + Docker). Returns 200 OK or 503 Service Unavailable
+- `/metrics` — Prometheus-format row counts for all tables
+
+Authentication: HTTP Basic Auth via `DASHBOARD_USER` / `DASHBOARD_PASSWORD` env vars. If `DASHBOARD_PASSWORD` is empty, auth is disabled.
+
+### Web Portal
+
+**File:** `host/webportal.py`
+**Default port:** 8766 (env: `WEBPORTAL_PORT`)
+
+A browser-based chat interface using long-polling (no WebSocket dependency). Disabled by default.
+
+Features:
+- Group selector dropdown
+- Scrollable chat view with 1-second polling
+- `deliver_reply(group_folder, text)` function — called by the host to push bot responses to the browser
+
+Enable via `WEBPORTAL_ENABLED=true`.
+
+### Environment Variables (Web Interfaces)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DASHBOARD_PORT` | `8765` | Web dashboard port |
+| `DASHBOARD_USER` | `admin` | Basic Auth username |
+| `DASHBOARD_PASSWORD` | _(empty)_ | Basic Auth password. Empty = no auth |
+| `WEBPORTAL_ENABLED` | `false` | Enable browser chat interface |
+| `WEBPORTAL_PORT` | `8766` | Web portal port |
+| `WEBPORTAL_HOST` | `127.0.0.1` | Web portal bind address |
+
+---
+
 ## MCP Servers
 
 ### EvoClaw MCP (built-in)
@@ -624,12 +717,12 @@ The `evoclaw` MCP server is created dynamically per agent call with the current 
 | Tool | Purpose |
 |------|---------|
 | `schedule_task` | Schedule a recurring or one-time task |
-| `list_tasks` | Show tasks (group's tasks, or all if main) |
+| `list_tasks` | Show tasks (group's tasks, or all if main). Also exposed to container agents via `scheduledTasks` in the input payload |
 | `get_task` | Get task details and run history |
 | `update_task` | Modify task prompt or schedule |
 | `pause_task` | Pause a task |
 | `resume_task` | Resume a paused task |
-| `cancel_task` | Delete a task |
+| `cancel_task` | Delete/cancel a task. Container agents can call this directly via the `cancel_task(task_id)` tool |
 | `send_message` | Send a message to the group via its channel |
 
 ---
