@@ -223,7 +223,9 @@ evoclaw/
 ├── scripts/ ← CLI 工具腳本
 │   └── add_indexes_migration.py ← 資料庫索引優化（新增）
 ├── tests/ ← 測試框架
-│   └── test_immune_enhanced.py ← 免疫系統測試（新增）
+│   ├── test_immune_enhanced.py ← 免疫系統測試
+│   ├── test_dev_engine.py ← DevEngine pipeline 測試
+│   └── test_core.py ← 核心測試（DB、Router、Scheduler、Health Monitor、Dev Log）
 └── groups/
     └── {群組名稱}/
         └── MEMORY.md ← 每群組記憶檔案
@@ -415,7 +417,7 @@ EvoClaw 透過 `skills_engine/` 系統支援可插拔的功能擴充（Skill Plu
 
 ## 健康監控系統
 
-EvoClaw 內建後台健康監控進程（`host/health_monitor.py`），即時追蹤系統狀態並自動告警。
+EvoClaw 內建後台健康監控進程（`host/health_monitor.py`），系統啟動後自動作為第五個 async 迴圈在背景持續運行，每 60 秒檢查一次系統狀態並自動告警。
 
 **監控維度：**
 - Container 排隊數量（警告：>10，嚴重：>50）

@@ -5,6 +5,25 @@
 格式基於 [Keep a Changelog](https://keepachangelog.com/)，
 版本號遵循 [語意化版本](https://semver.org/)。
 
+## [1.6.1] — 2026-03-10
+
+### Bug Fixes
+
+- **Health Monitor 接入主流程**：`host/health_monitor.py` 的 `health_monitor_loop()` 已加入 `main.py` 的 `asyncio.gather()`，系統啟動後健康監控正式生效（之前程式存在但從未被呼叫）。同時在頂層 import 補上 `from .health_monitor import health_monitor_loop`。
+- **WebPortal `deliver_reply()` 修正**：`_process_group_messages()` 的 `on_output()` 回呼現在也呼叫 `deliver_reply(jid, text)`，確保一般訊息（非 IPC 觸發）的 Bot 回覆也能即時推送到 WebPortal 瀏覽器聊天介面。之前 `deliver_reply()` 只在 `_ipc_route_fn()` 中被呼叫，造成正常對話流程的回覆無法顯示在 WebPortal 中。
+
+### Tests
+
+- **新增 `tests/test_core.py`**（30+ 測試案例）：補齊之前缺乏的核心功能測試覆蓋率：
+  - **DB 層**（12 tests）：`init_database()`、`store_message()`、`get_new_messages()`（時間戳篩選、`is_bot_message` 排除）、`get_state()`/`set_state()`、`registered_groups` CRUD、task CRUD（create/update/delete/due 查詢）、`session` 儲存、`record_evolution_run()`
+  - **Router**（4 tests）：channel 註冊與 `find_channel()` 查找、`format_messages()` 結構化、`route_outbound()` 轉發、無 channel 時不崩潰
+  - **IPC Scheduler**（6 tests）：`_compute_next_run()` — interval、once（過去/未來）、cron、無效輸入、未知類型
+  - **IPC 權限**（3 tests）：`_require_own_or_main()` — 自己群組放行、主群組跨群組放行、非主群組跨群組 PermissionError
+  - **Health Monitor**（4 tests）：`get_health_status()` 回傳格式、`_should_send_warning()` 冷卻機制、`health_monitor_loop()` 停止事件響應
+  - **Dev Log**（3 tests）：`_write_dev_log()`/`get_dev_logs()` 寫入讀取、offset 增量、不存在 session 回傳空列表
+
+---
+
 ## [1.6.0] — 2026-03-10
 
 ### Features

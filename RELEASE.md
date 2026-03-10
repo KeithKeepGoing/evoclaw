@@ -1,3 +1,30 @@
+## v1.6.1 — 2026-03-10
+
+> Bug Fix 版：Health Monitor 接入、WebPortal 修正、核心測試補齊
+
+### Bug Fixes
+
+**Health Monitor 終於上線**
+
+`health_monitor.py` 一直存在但從未被啟動。本版本將 `health_monitor_loop()` 接入 `asyncio.gather()`，現在每 60 秒自動檢查：Container 排隊、錯誤率、記憶體用量（閾值 500MB 警告）、DB 大小（閾值 100MB 警告）。
+
+**WebPortal 回覆修正**
+
+一般對話（非 IPC 觸發）的 Bot 回覆現在也會推送到 WebPortal（`http://localhost:8766`）。之前只有 IPC 路徑有呼叫 `deliver_reply()`，正常聊天流程的回覆不會顯示在瀏覽器。
+
+### Tests
+
+新增 `tests/test_core.py`，30+ 個測試案例覆蓋：DB 層（12）、Router（4）、IPC Scheduler（6）、IPC 權限（3）、Health Monitor（4）、Dev Log（3）。
+
+### 升級方式
+
+```bash
+git pull
+python run.py
+```
+
+---
+
 ## v1.6.0 — 2026-03-10
 
 > DevEngine Dashboard 全面現代化 — 直接從 Dashboard 啟動、監控、控制開發流程

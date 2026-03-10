@@ -19,6 +19,7 @@ from .ipc_watcher import start_ipc_watcher
 from .task_scheduler import start_scheduler_loop
 from .router import register_channel, route_outbound, format_messages, find_channel
 from .evolution import check_message as immune_check, evolution_loop
+from .health_monitor import health_monitor_loop
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL, logging.INFO),
@@ -157,6 +158,12 @@ async def _process_group_messages(group: dict, messages: list[dict],
     async def on_output(text: str):
         # 將 container 的回覆透過 router 發送回對應的聊天室
         await route_outbound(jid, text)
+        # Push reply to Web Portal sessions watching this JID
+        try:
+            from .webportal import deliver_reply
+            deliver_reply(jid, text)
+        except Exception:
+            pass
         # Store bot response in DB so dashboard can show full conversation
         try:
             ts = int(time.time() * 1000)
@@ -399,6 +406,7 @@ async def main() -> None:
             start_ipc_watcher(_get_groups, _ipc_route_fn, _stop_event),
             start_scheduler_loop(_get_group_by_jid, run_container_agent, _stop_event),
             evolution_loop(_stop_event),
+            health_monitor_loop(_stop_event),
         )
     finally:
         # 確保所有頻道在離開時都乾淨地斷線
