@@ -264,6 +264,8 @@ async def main() -> None:
     # 初始化 SQLite 資料庫，建立所有必要的資料表
     db_path = config.STORE_DIR / "messages.db"
     db.init_database(db_path)
+    from . import log_buffer
+    log_buffer.install()
     _load_state()
 
     # 啟動 Web dashboard（背景 daemon thread，port DASHBOARD_PORT）

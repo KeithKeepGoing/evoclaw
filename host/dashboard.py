@@ -1,287 +1,578 @@
-"""Simple web dashboard for EvoClaw — no external dependencies"""
+"""
+EvoClaw Dashboard — Full SPA with sidebar navigation.
+
+Sections:
+  1. 狀態監控 — Container status, active agents, memory, session stats
+  2. 日誌查看 — Real-time SSE log stream with level filter
+  3. Agent 管理 — Task CRUD, container stop
+  4. 系統設定 — .env viewer/editor, CLAUDE.md editor
+
+No external dependencies — pure stdlib.
+"""
+import base64
 import http.server
 import json
+import os
 import sqlite3
+import subprocess
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
+
 from . import config
 
-# ── HTML template ──────────────────────────────────────────────────────────────
-
-_HTML_TEMPLATE = """<!DOCTYPE html>
-<html lang="en">
+# ─────────────────────────────────────────────────────────────────────────────
+# SPA Shell HTML
+# ─────────────────────────────────────────────────────────────────────────────
+_SHELL = r"""<!DOCTYPE html>
+<html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="refresh" content="10">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>EvoClaw Dashboard</title>
 <style>
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{
-    background: #1a1a2e;
-    color: #e0e0e0;
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 13px;
-    padding: 16px;
-  }}
-  h1 {{
-    font-size: 20px;
-    color: #a78bfa;
-    letter-spacing: 2px;
-    margin-bottom: 4px;
-  }}
-  h2 {{
-    font-size: 14px;
-    color: #7c3aed;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    margin-bottom: 8px;
-    padding-bottom: 4px;
-    border-bottom: 1px solid #2d2d4e;
-  }}
-  .topbar {{
-    display: flex;
-    gap: 32px;
-    align-items: center;
-    background: #16213e;
-    border: 1px solid #2d2d4e;
-    border-radius: 6px;
-    padding: 12px 20px;
-    margin-bottom: 20px;
-  }}
-  .topbar .label {{ color: #6b7280; font-size: 11px; }}
-  .topbar .value {{ color: #a78bfa; font-weight: bold; }}
-  .topbar .meta {{ display: flex; flex-direction: column; gap: 2px; }}
-  .refresh-note {{
-    color: #4b5563;
-    font-size: 11px;
-    margin-left: auto;
-    text-align: right;
-  }}
-  .section {{
-    background: #16213e;
-    border: 1px solid #2d2d4e;
-    border-radius: 6px;
-    padding: 16px;
-    margin-bottom: 16px;
-  }}
-  table {{
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 4px;
-  }}
-  th {{
-    text-align: left;
-    color: #6b7280;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    padding: 6px 8px;
-    border-bottom: 1px solid #2d2d4e;
-  }}
-  td {{
-    padding: 6px 8px;
-    border-bottom: 1px solid #1a1a2e;
-    vertical-align: top;
-    word-break: break-all;
-  }}
-  tr:last-child td {{ border-bottom: none; }}
-  tr:nth-child(even) td {{ background: #1e1e38; }}
-  .badge {{
-    display: inline-block;
-    padding: 1px 8px;
-    border-radius: 3px;
-    font-size: 11px;
-    font-weight: bold;
-    letter-spacing: 0.5px;
-  }}
-  .badge-green  {{ background: #064e3b; color: #34d399; }}
-  .badge-yellow {{ background: #451a03; color: #fbbf24; }}
-  .badge-red    {{ background: #450a0a; color: #f87171; }}
-  .badge-gray   {{ background: #1f2937; color: #9ca3af; }}
-  .badge-blue   {{ background: #1e3a5f; color: #60a5fa; }}
-  .trunc {{ color: #9ca3af; }}
-  .na {{ color: #374151; font-style: italic; }}
-  .empty {{ color: #374151; text-align: center; padding: 16px; }}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0f0f1a;color:#e0e0e0;font-family:'Courier New',monospace;font-size:13px;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+#topbar{background:#16213e;border-bottom:1px solid #2d2d4e;padding:8px 16px;display:flex;align-items:center;gap:24px;flex-shrink:0}
+#topbar .logo{color:#a78bfa;font-size:16px;font-weight:bold;letter-spacing:2px}
+#topbar .meta{display:flex;flex-direction:column}
+#topbar .label{color:#4b5563;font-size:10px;text-transform:uppercase}
+#topbar .value{color:#a78bfa;font-weight:bold}
+#topbar .clock{margin-left:auto;color:#6b7280;font-size:12px}
+#layout{display:flex;flex:1;overflow:hidden}
+#sidebar{width:160px;background:#13132a;border-right:1px solid #2d2d4e;display:flex;flex-direction:column;flex-shrink:0;padding-top:8px}
+.nav-item{padding:12px 16px;cursor:pointer;color:#6b7280;display:flex;align-items:center;gap:8px;border-left:3px solid transparent;transition:all 0.15s;user-select:none}
+.nav-item:hover{color:#e0e0e0;background:#1a1a2e}
+.nav-item.active{color:#a78bfa;border-left-color:#a78bfa;background:#1a1a2e}
+.nav-item .icon{font-size:16px}
+#main{flex:1;overflow-y:auto;padding:16px}
+.section-title{font-size:16px;color:#a78bfa;letter-spacing:2px;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #2d2d4e}
+.card{background:#16213e;border:1px solid #2d2d4e;border-radius:6px;padding:16px;margin-bottom:12px}
+.card h3{font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.grid-4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px}
+.stat-card{background:#1a1a2e;border:1px solid #2d2d4e;border-radius:6px;padding:12px}
+.stat-card .stat-label{color:#4b5563;font-size:10px;text-transform:uppercase;letter-spacing:1px}
+.stat-card .stat-value{color:#a78bfa;font-size:22px;font-weight:bold;margin-top:4px}
+.stat-card .stat-sub{color:#6b7280;font-size:10px;margin-top:2px}
+table{width:100%;border-collapse:collapse;margin-top:4px}
+th{text-align:left;color:#4b5563;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;padding:6px 8px;border-bottom:1px solid #2d2d4e}
+td{padding:6px 8px;border-bottom:1px solid #0f0f1a;vertical-align:top;word-break:break-all}
+tr:last-child td{border-bottom:none}
+tr:nth-child(even) td{background:#1a1a2e}
+.badge{display:inline-block;padding:1px 8px;border-radius:3px;font-size:10px;font-weight:bold;letter-spacing:0.5px}
+.b-green{background:#064e3b;color:#34d399}
+.b-yellow{background:#451a03;color:#fbbf24}
+.b-red{background:#450a0a;color:#f87171}
+.b-blue{background:#1e3a5f;color:#60a5fa}
+.b-gray{background:#1f2937;color:#9ca3af}
+.b-purple{background:#3b0764;color:#c084fc}
+.na{color:#374151;font-style:italic}
+.empty{color:#374151;text-align:center;padding:24px;font-style:italic}
+/* Log viewer */
+#log-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.filter-btn{padding:4px 12px;border:1px solid #2d2d4e;border-radius:4px;cursor:pointer;background:#13132a;color:#6b7280;font-family:inherit;font-size:11px;transition:all 0.15s}
+.filter-btn.active{background:#3b0764;color:#c084fc;border-color:#7c3aed}
+.filter-btn:hover{color:#e0e0e0}
+#log-box{background:#0a0a14;border:1px solid #2d2d4e;border-radius:4px;height:500px;overflow-y:auto;padding:8px;font-size:11px;line-height:1.6}
+.log-line{padding:1px 0;border-bottom:1px solid #0f0f1a}
+.log-DEBUG{color:#4b5563}
+.log-INFO{color:#60a5fa}
+.log-WARNING{color:#f59e0b}
+.log-ERROR{color:#f87171}
+.log-CRITICAL{color:#ff0000;font-weight:bold}
+/* Management */
+.btn{padding:5px 12px;border:1px solid #2d2d4e;border-radius:4px;cursor:pointer;font-family:inherit;font-size:11px;transition:all 0.15s}
+.btn-danger{background:#450a0a;color:#f87171;border-color:#7f1d1d}
+.btn-danger:hover{background:#7f1d1d}
+.btn-primary{background:#1e3a5f;color:#60a5fa;border-color:#1d4ed8}
+.btn-primary:hover{background:#1d4ed8}
+.btn-success{background:#064e3b;color:#34d399;border-color:#065f46}
+.btn-success:hover{background:#065f46}
+.btn-sm{padding:3px 8px;font-size:10px}
+/* Settings */
+.env-row{display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #1a1a2e}
+.env-key{color:#a78bfa;min-width:200px;font-size:11px}
+.env-val{flex:1;background:#0a0a14;border:1px solid #2d2d4e;border-radius:3px;padding:3px 8px;color:#e0e0e0;font-family:inherit;font-size:11px}
+.env-val:focus{outline:none;border-color:#7c3aed}
+.env-save{padding:3px 10px;background:#3b0764;color:#c084fc;border:1px solid #7c3aed;border-radius:3px;cursor:pointer;font-family:inherit;font-size:10px}
+.claude-editor{width:100%;height:300px;background:#0a0a14;border:1px solid #2d2d4e;border-radius:4px;padding:8px;color:#e0e0e0;font-family:'Courier New',monospace;font-size:11px;resize:vertical}
+.claude-editor:focus{outline:none;border-color:#7c3aed}
+#status-msg{position:fixed;bottom:16px;right:16px;padding:8px 16px;border-radius:6px;font-size:12px;display:none;z-index:9999}
+.msg-ok{background:#064e3b;color:#34d399;border:1px solid #065f46}
+.msg-err{background:#450a0a;color:#f87171;border:1px solid #7f1d1d}
+/* Loading */
+.loading{color:#4b5563;text-align:center;padding:32px;font-style:italic}
 </style>
 </head>
 <body>
 
-<div class="topbar">
+<div id="topbar">
+  <div class="logo">🦀 EvoClaw</div>
   <div class="meta">
-    <span class="label">SYSTEM</span>
-    <span class="value">EvoClaw</span>
+    <span class="label">Database</span>
+    <span class="value" id="h-db">—</span>
   </div>
   <div class="meta">
-    <span class="label">DATABASE</span>
-    <span class="value">{db_path}</span>
+    <span class="label">Port</span>
+    <span class="value">PORT_PLACEHOLDER</span>
   </div>
   <div class="meta">
-    <span class="label">UPTIME SINCE</span>
-    <span class="value">{uptime}</span>
+    <span class="label">Errors</span>
+    <span class="value" id="h-errors" style="color:#f87171">—</span>
   </div>
-  <div class="meta">
-    <span class="label">DASHBOARD</span>
-    <span class="value">PORT {port}</span>
+  <div class="clock" id="clock"></div>
+</div>
+
+<div id="layout">
+  <div id="sidebar">
+    <div class="nav-item active" onclick="showTab('status')" id="nav-status">
+      <span class="icon">📊</span><span>狀態監控</span>
+    </div>
+    <div class="nav-item" onclick="showTab('logs')" id="nav-logs">
+      <span class="icon">📋</span><span>日誌查看</span>
+    </div>
+    <div class="nav-item" onclick="showTab('manage')" id="nav-manage">
+      <span class="icon">🤖</span><span>Agent 管理</span>
+    </div>
+    <div class="nav-item" onclick="showTab('settings')" id="nav-settings">
+      <span class="icon">⚙️</span><span>系統設定</span>
+    </div>
   </div>
-  <div class="refresh-note">auto-refresh every 10s<br>last loaded: {now}</div>
+  <div id="main">
+    <div id="tab-status"></div>
+    <div id="tab-logs" style="display:none"></div>
+    <div id="tab-manage" style="display:none"></div>
+    <div id="tab-settings" style="display:none"></div>
+  </div>
 </div>
 
-<!-- Registered Groups -->
-<div class="section">
-  <h2>Registered Groups</h2>
-  {groups_table}
-</div>
+<div id="status-msg"></div>
 
-<!-- Scheduled Tasks -->
-<div class="section">
-  <h2>Scheduled Tasks</h2>
-  {tasks_table}
-</div>
+<script>
+// ── Clock ──────────────────────────────────────────────────────────────────
+function updateClock(){
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+}
+setInterval(updateClock, 1000); updateClock();
 
-<!-- Recent Task Run Logs -->
-<div class="section">
-  <h2>Recent Task Run Logs (last 20)</h2>
-  {logs_table}
-</div>
+// ── Tab navigation ─────────────────────────────────────────────────────────
+let _currentTab = 'status';
+let _logEs = null;
+let _autoRefresh = null;
 
-<!-- Active Sessions -->
-<div class="section">
-  <h2>Active Sessions</h2>
-  {sessions_table}
-</div>
+function showTab(name) {
+  ['status','logs','manage','settings'].forEach(t => {
+    document.getElementById('tab-'+t).style.display = t===name?'':'none';
+    document.getElementById('nav-'+t).classList.toggle('active', t===name);
+  });
+  _currentTab = name;
+  clearInterval(_autoRefresh);
+  if (_logEs) { _logEs.close(); _logEs = null; }
+  if (name==='status') { loadStatus(); _autoRefresh = setInterval(loadStatus, 5000); }
+  else if (name==='logs') { initLogs(); }
+  else if (name==='manage') { loadManage(); _autoRefresh = setInterval(loadManage, 8000); }
+  else if (name==='settings') { loadSettings(); }
+}
 
-<!-- Recent Messages -->
-<div class="section">
-  <h2>Recent Messages (last 20)</h2>
-  {messages_table}
-</div>
+// ── Fetch helper ───────────────────────────────────────────────────────────
+async function api(path, opts) {
+  try {
+    const r = await fetch(path, opts);
+    if (!r.ok) throw new Error(r.status);
+    return await r.json();
+  } catch(e) { return null; }
+}
 
-<!-- Evolution Stats -->
-<div class="section">
-  <h2>Evolution Stats (Group Genome)</h2>
-  {evolution_table}
-</div>
+function showMsg(msg, ok=true) {
+  const el = document.getElementById('status-msg');
+  el.textContent = msg;
+  el.className = ok ? 'msg-ok' : 'msg-err';
+  el.style.display = 'block';
+  setTimeout(() => el.style.display='none', 3000);
+}
 
-<!-- Evolution Log -->
-<div class="section">
-  <h2>&#129516; Evolution Log (last 30 events)</h2>
-  {evolution_log_table}
-</div>
+function esc(s) {
+  if (s==null) return '<span class="na">—</span>';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function trunc(s, n=80) {
+  if (s==null) return '<span class="na">—</span>';
+  s=String(s); return s.length>n ? esc(s.slice(0,n))+'…' : esc(s);
+}
+function badge(txt, cls='gray') {
+  const m={green:'b-green',yellow:'b-yellow',red:'b-red',blue:'b-blue',gray:'b-gray',purple:'b-purple'};
+  return `<span class="badge ${m[cls]||'b-gray'}">${esc(txt)}</span>`;
+}
+function statusBadge(s) {
+  if (!s) return badge('—');
+  s=s.toLowerCase();
+  if (s==='active'||s==='running'||s==='ok') return badge(s,'green');
+  if (s==='paused'||s==='warning') return badge(s,'yellow');
+  if (s==='error'||s==='failed') return badge(s,'red');
+  if (s==='cancelled') return badge(s,'gray');
+  return badge(s,'gray');
+}
+function fmtMs(ts) {
+  if (!ts) return '<span class="na">—</span>';
+  return new Date(ts).toLocaleString();
+}
+function fmtS(ts) {
+  if (!ts) return '<span class="na">—</span>';
+  return new Date(ts*1000).toLocaleString();
+}
 
-<!-- Immune Threats -->
-<div class="section">
-  <h2>Immune Threats (blocked or count &gt; 3)</h2>
-  {immune_table}
-</div>
+// ── Tab 1: 狀態監控 ────────────────────────────────────────────────────────
+async function loadStatus() {
+  const [stat, agents, containers, health] = await Promise.all([
+    api('/api/stats'),
+    api('/api/agents'),
+    api('/api/containers'),
+    api('/api/health'),
+  ]);
 
+  if (stat) {
+    document.getElementById('h-db').textContent = stat.db_path || '—';
+    document.getElementById('h-errors').textContent = stat.error_count || '0';
+  }
+
+  let html = '<div class="section-title">📊 狀態監控</div>';
+
+  // Stat cards row
+  html += '<div class="grid-4" style="margin-bottom:12px">';
+  html += statCard('Active Agents', agents ? agents.length : '—', 'containers running');
+  const mem = stat && stat.memory ? stat.memory : {};
+  html += statCard('Memory', mem.rss_mb ? mem.rss_mb+'MB' : '—', 'RSS (process)');
+  html += statCard('Sessions', stat ? stat.sessions : '—', 'active sessions');
+  html += statCard('Messages', stat ? stat.messages_today : '—', 'messages today');
+  html += '</div>';
+
+  // Health check
+  html += '<div class="card"><h3>Health Checks</h3>';
+  if (health && health.checks) {
+    html += '<table><thead><tr><th>Component</th><th>Status</th></tr></thead><tbody>';
+    for (const [k,v] of Object.entries(health.checks)) {
+      const ok = v==='ok';
+      html += `<tr><td>${esc(k)}</td><td>${statusBadge(ok?'ok':'error')}</td></tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">Health data unavailable</div>';
+  }
+  html += '</div>';
+
+  // Active agents
+  html += '<div class="card"><h3>🐳 Active Agent Containers</h3>';
+  if (agents && agents.length > 0) {
+    html += '<table><thead><tr><th>Container</th><th>Group</th><th>JID</th><th>Started</th><th>Type</th></tr></thead><tbody>';
+    for (const a of agents) {
+      const elapsed = Math.round((Date.now()-a.started_at)/1000);
+      html += `<tr>
+        <td><code style="font-size:10px">${esc(a.name)}</code></td>
+        <td>${esc(a.folder)}</td>
+        <td style="font-size:10px">${esc(a.jid)}</td>
+        <td>${elapsed}s ago</td>
+        <td>${a.is_scheduled ? badge('scheduled','purple') : badge('message','blue')}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">No containers running</div>';
+  }
+  html += '</div>';
+
+  // Docker containers (all evoclaw-*)
+  html += '<div class="card"><h3>🐳 Docker Process List (evoclaw-*)</h3>';
+  if (containers && containers.length > 0) {
+    html += '<table><thead><tr><th>Name</th><th>Status</th><th>Image</th><th>Created</th></tr></thead><tbody>';
+    for (const c of containers) {
+      html += `<tr>
+        <td><code style="font-size:10px">${esc(c.name)}</code></td>
+        <td>${statusBadge(c.status)}</td>
+        <td style="font-size:10px">${esc(c.image)}</td>
+        <td style="font-size:10px">${esc(c.created_at)}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">No Docker containers found</div>';
+  }
+  html += '</div>';
+
+  // Groups & Sessions
+  html += '<div class="grid-2">';
+  const groups = stat && stat.groups ? stat.groups : [];
+  html += '<div class="card"><h3>Registered Groups</h3>';
+  if (groups.length) {
+    html += '<table><thead><tr><th>Folder</th><th>JID</th><th>Main</th></tr></thead><tbody>';
+    for (const g of groups) {
+      html += `<tr><td>${esc(g.folder)}</td><td style="font-size:10px">${esc(g.jid)}</td><td>${g.is_main?badge('main','purple'):''}</td></tr>`;
+    }
+    html += '</tbody></table>';
+  } else html += '<div class="empty">No groups</div>';
+  html += '</div>';
+
+  const sessions = stat && stat.session_list ? stat.session_list : [];
+  html += '<div class="card"><h3>Sessions</h3>';
+  if (sessions.length) {
+    html += '<table><thead><tr><th>Group</th><th>Session ID</th></tr></thead><tbody>';
+    for (const s of sessions) {
+      html += `<tr><td>${esc(s.group_folder)}</td><td><code style="font-size:10px">${esc(s.session_id)}</code></td></tr>`;
+    }
+    html += '</tbody></table>';
+  } else html += '<div class="empty">No sessions</div>';
+  html += '</div>';
+  html += '</div>'; // grid-2
+
+  document.getElementById('tab-status').innerHTML = html;
+}
+
+function statCard(label, value, sub) {
+  return `<div class="stat-card">
+    <div class="stat-label">${label}</div>
+    <div class="stat-value">${value}</div>
+    <div class="stat-sub">${sub}</div>
+  </div>`;
+}
+
+// ── Tab 2: 日誌查看 ────────────────────────────────────────────────────────
+let _logLevel = 'ALL';
+let _logPaused = false;
+let _logIdx = 0;
+
+function initLogs() {
+  const html = `<div class="section-title">📋 日誌查看</div>
+  <div class="card">
+    <div id="log-toolbar">
+      <span style="color:#6b7280;font-size:11px">Level:</span>
+      ${['ALL','DEBUG','INFO','WARNING','ERROR'].map(l =>
+        `<button class="filter-btn${l===_logLevel?' active':''}" onclick="setLogLevel('${l}')">${l}</button>`
+      ).join('')}
+      <button class="filter-btn" onclick="clearLogs()">🗑 Clear</button>
+      <button class="filter-btn" id="pause-btn" onclick="togglePause()">${_logPaused?'▶ Resume':'⏸ Pause'}</button>
+      <span style="margin-left:auto;color:#4b5563;font-size:10px" id="log-count">0 lines</span>
+    </div>
+    <div id="log-box"></div>
+  </div>`;
+  document.getElementById('tab-logs').innerHTML = html;
+  startLogStream();
+}
+
+function setLogLevel(level) {
+  _logLevel = level;
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    if (['ALL','DEBUG','INFO','WARNING','ERROR'].includes(b.textContent)) {
+      b.classList.toggle('active', b.textContent === level);
+    }
+  });
+  _logIdx = 0;
+  document.getElementById('log-box').innerHTML = '';
+  startLogStream();
+}
+
+function clearLogs() {
+  document.getElementById('log-box').innerHTML = '';
+  document.getElementById('log-count').textContent = '0 lines';
+}
+
+function togglePause() {
+  _logPaused = !_logPaused;
+  document.getElementById('pause-btn').textContent = _logPaused ? '▶ Resume' : '⏸ Pause';
+}
+
+function startLogStream() {
+  if (_logEs) { _logEs.close(); _logEs = null; }
+  _logEs = new EventSource(`/api/logs/stream?level=${_logLevel}`);
+  _logEs.onmessage = function(e) {
+    if (_logPaused) return;
+    try {
+      const entry = JSON.parse(e.data);
+      _logIdx = entry.idx;
+      const box = document.getElementById('log-box');
+      if (!box) return;
+      const line = document.createElement('div');
+      line.className = `log-line log-${entry.level}`;
+      line.textContent = entry.msg;
+      box.appendChild(line);
+      // Keep last 500 lines
+      while (box.children.length > 500) box.removeChild(box.firstChild);
+      box.scrollTop = box.scrollHeight;
+      const cnt = document.getElementById('log-count');
+      if (cnt) cnt.textContent = box.children.length + ' lines';
+    } catch(e) {}
+  };
+}
+
+// ── Tab 3: Agent 管理 ──────────────────────────────────────────────────────
+async function loadManage() {
+  const [tasks, agents] = await Promise.all([
+    api('/api/tasks'),
+    api('/api/agents'),
+  ]);
+
+  let html = '<div class="section-title">🤖 Agent 管理</div>';
+
+  // Active containers with stop button
+  html += '<div class="card"><h3>🐳 Running Containers</h3>';
+  if (agents && agents.length > 0) {
+    html += '<table><thead><tr><th>Container</th><th>Group</th><th>Running for</th><th>Action</th></tr></thead><tbody>';
+    for (const a of agents) {
+      const elapsed = Math.round((Date.now()-a.started_at)/1000);
+      html += `<tr>
+        <td><code style="font-size:10px">${esc(a.name)}</code></td>
+        <td>${esc(a.folder)}</td>
+        <td>${elapsed}s</td>
+        <td><button class="btn btn-danger btn-sm" onclick="stopContainer('${a.name}')">⏹ Stop</button></td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">No containers running</div>';
+  }
+  html += '</div>';
+
+  // Scheduled tasks with cancel/update
+  html += '<div class="card"><h3>🗓 Scheduled Tasks</h3>';
+  if (tasks && tasks.length > 0) {
+    html += '<table><thead><tr><th>ID</th><th>Group</th><th>Type</th><th>Schedule</th><th>Next Run</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+    for (const t of tasks) {
+      const tid = t.id;
+      html += `<tr id="task-row-${esc(tid)}">
+        <td><code style="font-size:10px">${esc(String(tid).slice(0,8))}</code></td>
+        <td>${esc(t.group_folder)}</td>
+        <td>${esc(t.schedule_type)}</td>
+        <td><input id="sv-${esc(tid)}" value="${esc(t.schedule_value)}" style="background:#0a0a14;border:1px solid #2d2d4e;color:#e0e0e0;padding:2px 6px;border-radius:3px;font-family:inherit;font-size:11px;width:120px"></td>
+        <td style="font-size:11px">${fmtMs(t.next_run)}</td>
+        <td>${statusBadge(t.status)}</td>
+        <td style="white-space:nowrap">
+          <button class="btn btn-primary btn-sm" onclick="updateTask('${esc(tid)}')">💾 Save</button>
+          ${t.status==='active'?`<button class="btn btn-danger btn-sm" style="margin-left:4px" onclick="cancelTask('${esc(tid)}')">✕ Cancel</button>`:''}
+        </td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">No scheduled tasks</div>';
+  }
+  html += '</div>';
+
+  document.getElementById('tab-manage').innerHTML = html;
+}
+
+async function stopContainer(name) {
+  if (!confirm(`Stop container ${name}?`)) return;
+  const r = await api(`/api/containers/${encodeURIComponent(name)}/stop`, {method:'POST'});
+  showMsg(r && r.ok ? `Stopped ${name}` : 'Failed to stop container', r && r.ok);
+  setTimeout(loadManage, 1000);
+}
+
+async function cancelTask(id) {
+  if (!confirm('Cancel this task?')) return;
+  const r = await api(`/api/tasks/${encodeURIComponent(id)}/cancel`, {method:'POST'});
+  showMsg(r && r.ok ? 'Task cancelled' : 'Failed', r && r.ok);
+  loadManage();
+}
+
+async function updateTask(id) {
+  const sv = document.getElementById('sv-'+id);
+  if (!sv) return;
+  const r = await api(`/api/tasks/${encodeURIComponent(id)}/update`, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({schedule_value: sv.value})
+  });
+  showMsg(r && r.ok ? 'Task updated' : 'Failed to update', r && r.ok);
+  loadManage();
+}
+
+// ── Tab 4: 系統設定 ────────────────────────────────────────────────────────
+async function loadSettings() {
+  const [envData, claudeMds] = await Promise.all([
+    api('/api/env'),
+    api('/api/claude-mds'),
+  ]);
+
+  let html = '<div class="section-title">⚙️ 系統設定</div>';
+
+  // API Keys / Env
+  html += '<div class="card"><h3>🔑 API Key 與環境變數</h3>';
+  html += '<p style="color:#4b5563;font-size:10px;margin-bottom:8px">敏感欄位已遮罩。點擊 Save 更新 .env 檔案。</p>';
+  if (envData && envData.vars) {
+    for (const [k, v] of Object.entries(envData.vars)) {
+      const masked = v.masked;
+      html += `<div class="env-row">
+        <span class="env-key">${esc(k)}</span>
+        <input class="env-val" id="env-${esc(k)}" type="${masked?'password':'text'}" value="${esc(v.value)}" placeholder="${masked?'(masked — type to update)':''}">
+        <button class="env-save" onclick="saveEnv('${esc(k)}')">Save</button>
+      </div>`;
+    }
+  } else {
+    html += '<div class="empty">Could not read .env file</div>';
+  }
+  html += '</div>';
+
+  // CLAUDE.md editor
+  html += '<div class="card"><h3>📝 CLAUDE.md 編輯器</h3>';
+  if (claudeMds && claudeMds.files) {
+    for (const f of claudeMds.files) {
+      html += `<div style="margin-bottom:16px">
+        <div style="color:#a78bfa;font-size:11px;margin-bottom:6px">📄 ${esc(f.path)}</div>
+        <textarea class="claude-editor" id="claude-${btoa(f.path)}">${esc(f.content)}</textarea>
+        <div style="margin-top:6px">
+          <button class="btn btn-success btn-sm" onclick="saveClaude('${esc(f.path)}', '${btoa(f.path)}')">💾 Save</button>
+        </div>
+      </div>`;
+    }
+  } else {
+    html += '<div class="empty">No CLAUDE.md files found</div>';
+  }
+  html += '</div>';
+
+  document.getElementById('tab-settings').innerHTML = html;
+}
+
+async function saveEnv(key) {
+  const input = document.getElementById('env-'+key);
+  if (!input || !input.value) return;
+  const r = await api('/api/env', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({key, value: input.value})
+  });
+  showMsg(r && r.ok ? `Saved ${key}` : 'Failed to save', r && r.ok);
+}
+
+async function saveClaude(path, b64) {
+  const ta = document.getElementById('claude-'+b64);
+  if (!ta) return;
+  const r = await api('/api/claude-mds', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({path, content: ta.value})
+  });
+  showMsg(r && r.ok ? 'CLAUDE.md saved' : 'Failed to save', r && r.ok);
+}
+
+// Initial load
+showTab('status');
+</script>
 </body>
 </html>
 """
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-def _fmt_ts_ms(ts_ms):
-    """Format a millisecond Unix timestamp to human-readable string."""
-    if ts_ms is None:
-        return '<span class="na">N/A</span>'
-    try:
-        dt = datetime.fromtimestamp(int(ts_ms) / 1000)
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return '<span class="na">N/A</span>'
-
-
-def _fmt_ts_s(ts_s):
-    """Format a seconds Unix timestamp to human-readable string."""
-    if ts_s is None:
-        return '<span class="na">N/A</span>'
-    try:
-        dt = datetime.fromtimestamp(int(ts_s))
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return '<span class="na">N/A</span>'
-
-
-def _fmt_dt_str(dt_str):
-    """Format a datetime string (SQLite datetime()) to human-readable."""
-    if not dt_str:
-        return '<span class="na">N/A</span>'
-    try:
-        # SQLite datetime() returns 'YYYY-MM-DD HH:MM:SS'
-        dt = datetime.strptime(str(dt_str), "%Y-%m-%d %H:%M:%S")
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return str(dt_str)
-
-
-def _esc(s):
-    """HTML-escape a string."""
-    if s is None:
-        return '<span class="na">N/A</span>'
-    return (str(s)
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;"))
-
-
-def _trunc(s, n=100):
-    """Truncate a string and HTML-escape it."""
-    if s is None:
-        return '<span class="na">N/A</span>'
-    s = str(s)
-    if len(s) > n:
-        return _esc(s[:n]) + '<span class="trunc">…</span>'
-    return _esc(s)
-
-
-def _bool_badge(val):
-    if val:
-        return '<span class="badge badge-green">YES</span>'
-    return '<span class="badge badge-gray">NO</span>'
-
-
-def _status_badge(status):
-    s = str(status).lower() if status else ""
-    if s == "active":
-        return '<span class="badge badge-green">active</span>'
-    elif s == "paused":
-        return '<span class="badge badge-yellow">paused</span>'
-    elif s in ("error", "failed"):
-        return '<span class="badge badge-red">' + _esc(status) + '</span>'
-    else:
-        return '<span class="badge badge-gray">' + _esc(status) + '</span>'
-
-
-def _run_status_badge(status):
-    s = str(status).lower() if status else ""
-    if s in ("ok", "success", "done"):
-        return '<span class="badge badge-green">' + _esc(status) + '</span>'
-    elif s in ("error", "failed", "timeout"):
-        return '<span class="badge badge-red">' + _esc(status) + '</span>'
-    else:
-        return '<span class="badge badge-gray">' + _esc(status) + '</span>'
-
-
-def _empty_row(cols):
-    return f'<tr><td colspan="{cols}" class="empty">— no data —</td></tr>'
-
-
-# ── DB queries ─────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# DB helpers
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _open_db():
-    """Open a read-only connection to the EvoClaw database."""
     db_path = config.STORE_DIR / "messages.db"
-    # uri=True allows ?mode=ro for read-only access
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
-
 def _fetch(query, params=()):
-    """Execute a query and return list of dicts, or [] on any error."""
     try:
         conn = _open_db()
         try:
@@ -292,9 +583,7 @@ def _fetch(query, params=()):
     except Exception:
         return []
 
-
 def _fetch_one(query, params=()):
-    """Execute a query and return a single dict, or None on any error."""
     try:
         conn = _open_db()
         try:
@@ -305,417 +594,373 @@ def _fetch_one(query, params=()):
     except Exception:
         return None
 
+def _write_db(query, params=()):
+    """Execute a write query on the writable DB."""
+    try:
+        db_path = config.STORE_DIR / "messages.db"
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        conn.execute(query, params)
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
 
-# ── Table builders ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# API data providers
+# ─────────────────────────────────────────────────────────────────────────────
 
-def _build_groups_table():
-    rows = _fetch("SELECT folder, jid, trigger_pattern, is_main, requires_trigger FROM registered_groups ORDER BY folder")
-    if not rows:
-        return ('<table><thead><tr><th>folder</th><th>JID</th><th>trigger_pattern</th>'
-                '<th>is_main</th><th>requires_trigger</th></tr></thead>'
-                '<tbody>' + _empty_row(5) + '</tbody></table>')
-    body = ""
-    for r in rows:
-        body += (f"<tr>"
-                 f"<td>{_esc(r.get('folder'))}</td>"
-                 f"<td>{_esc(r.get('jid'))}</td>"
-                 f"<td>{_esc(r.get('trigger_pattern'))}</td>"
-                 f"<td>{_bool_badge(r.get('is_main'))}</td>"
-                 f"<td>{_bool_badge(r.get('requires_trigger'))}</td>"
-                 f"</tr>")
-    return (f'<table><thead><tr><th>folder</th><th>JID</th><th>trigger_pattern</th>'
-            f'<th>is_main</th><th>requires_trigger</th></tr></thead>'
-            f'<tbody>{body}</tbody></table>')
+def _get_stats() -> dict:
+    """Aggregate stats for the status tab."""
+    from . import log_buffer
+    groups = _fetch("SELECT folder, jid, is_main FROM registered_groups ORDER BY folder")
+    sessions = _fetch("SELECT group_folder, session_id FROM sessions")
+    today_start = int((datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()) * 1000)
+    today_msgs = _fetch_one("SELECT COUNT(*) as c FROM messages WHERE timestamp >= ?", (today_start,))
 
-
-def _build_tasks_table():
-    rows = _fetch(
-        "SELECT id, group_folder, schedule_type, schedule_value, next_run, status, last_result "
-        "FROM scheduled_tasks ORDER BY status, next_run"
-    )
-    if not rows:
-        return ('<table><thead><tr><th>id</th><th>group_folder</th><th>schedule_type</th>'
-                '<th>schedule_value</th><th>next_run</th><th>status</th><th>last_result</th></tr></thead>'
-                '<tbody>' + _empty_row(7) + '</tbody></table>')
-    body = ""
-    for r in rows:
-        task_id = str(r.get("id", ""))
-        body += (f"<tr>"
-                 f"<td><code>{_esc(task_id[:8])}</code></td>"
-                 f"<td>{_esc(r.get('group_folder'))}</td>"
-                 f"<td>{_esc(r.get('schedule_type'))}</td>"
-                 f"<td>{_esc(r.get('schedule_value'))}</td>"
-                 f"<td>{_fmt_ts_ms(r.get('next_run'))}</td>"
-                 f"<td>{_status_badge(r.get('status'))}</td>"
-                 f"<td>{_trunc(r.get('last_result'), 80)}</td>"
-                 f"</tr>")
-    return (f'<table><thead><tr><th>id</th><th>group_folder</th><th>schedule_type</th>'
-            f'<th>schedule_value</th><th>next_run</th><th>status</th><th>last_result</th></tr></thead>'
-            f'<tbody>{body}</tbody></table>')
-
-
-def _build_logs_table():
-    rows = _fetch(
-        "SELECT task_id, run_at, duration_ms, status, result, error "
-        "FROM task_run_logs ORDER BY run_at DESC LIMIT 20"
-    )
-    if not rows:
-        return ('<table><thead><tr><th>task_id</th><th>run_at</th><th>duration_ms</th>'
-                '<th>status</th><th>result / error</th></tr></thead>'
-                '<tbody>' + _empty_row(5) + '</tbody></table>')
-    body = ""
-    for r in rows:
-        task_id = str(r.get("task_id", ""))
-        result_text = r.get("result") or r.get("error")
-        body += (f"<tr>"
-                 f"<td><code>{_esc(task_id[:8])}</code></td>"
-                 f"<td>{_fmt_ts_ms(r.get('run_at'))}</td>"
-                 f"<td>{_esc(r.get('duration_ms'))}</td>"
-                 f"<td>{_run_status_badge(r.get('status'))}</td>"
-                 f"<td>{_trunc(result_text, 100)}</td>"
-                 f"</tr>")
-    return (f'<table><thead><tr><th>task_id</th><th>run_at</th><th>duration_ms</th>'
-            f'<th>status</th><th>result / error</th></tr></thead>'
-            f'<tbody>{body}</tbody></table>')
-
-
-def _build_sessions_table():
-    rows = _fetch("SELECT group_folder, session_id FROM sessions ORDER BY group_folder")
-    if not rows:
-        return ('<table><thead><tr><th>group_folder</th><th>session_id</th></tr></thead>'
-                '<tbody>' + _empty_row(2) + '</tbody></table>')
-    body = ""
-    for r in rows:
-        body += (f"<tr>"
-                 f"<td>{_esc(r.get('group_folder'))}</td>"
-                 f"<td><code>{_esc(r.get('session_id'))}</code></td>"
-                 f"</tr>")
-    return (f'<table><thead><tr><th>group_folder</th><th>session_id</th></tr></thead>'
-            f'<tbody>{body}</tbody></table>')
-
-
-def _build_messages_table():
-    rows = _fetch(
-        "SELECT chat_jid, sender_name, content, timestamp "
-        "FROM messages ORDER BY timestamp DESC LIMIT 20"
-    )
-    if not rows:
-        return ('<table><thead><tr><th>chat_jid</th><th>sender_name</th>'
-                '<th>content</th><th>timestamp</th></tr></thead>'
-                '<tbody>' + _empty_row(4) + '</tbody></table>')
-    body = ""
-    for r in rows:
-        body += (f"<tr>"
-                 f"<td>{_esc(r.get('chat_jid'))}</td>"
-                 f"<td>{_esc(r.get('sender_name'))}</td>"
-                 f"<td>{_trunc(r.get('content'), 80)}</td>"
-                 f"<td>{_fmt_ts_ms(r.get('timestamp'))}</td>"
-                 f"</tr>")
-    return (f'<table><thead><tr><th>chat_jid</th><th>sender_name</th>'
-            f'<th>content</th><th>timestamp</th></tr></thead>'
-            f'<tbody>{body}</tbody></table>')
-
-
-def _build_evolution_table():
-    rows = _fetch(
-        "SELECT jid, response_style, formality, technical_depth, generation, updated_at "
-        "FROM group_genome ORDER BY updated_at DESC"
-    )
-    if not rows:
-        return ('<table><thead><tr><th>jid</th><th>response_style</th><th>formality</th>'
-                '<th>technical_depth</th><th>generation</th><th>updated_at</th></tr></thead>'
-                '<tbody>' + _empty_row(6) + '</tbody></table>')
-    body = ""
-    for r in rows:
-        formality = r.get("formality")
-        tech = r.get("technical_depth")
-        body += (f"<tr>"
-                 f"<td>{_esc(r.get('jid'))}</td>"
-                 f"<td>{_esc(r.get('response_style'))}</td>"
-                 f"<td>{f'{formality:.2f}' if formality is not None else '<span class=\"na\">N/A</span>'}</td>"
-                 f"<td>{f'{tech:.2f}' if tech is not None else '<span class=\"na\">N/A</span>'}</td>"
-                 f"<td>{_esc(r.get('generation'))}</td>"
-                 f"<td>{_fmt_dt_str(r.get('updated_at'))}</td>"
-                 f"</tr>")
-    return (f'<table><thead><tr><th>jid</th><th>response_style</th><th>formality</th>'
-            f'<th>technical_depth</th><th>generation</th><th>updated_at</th></tr></thead>'
-            f'<tbody>{body}</tbody></table>')
-
-
-def _build_evolution_log_table():
-    rows = _fetch(
-        "SELECT timestamp, jid, event_type, fitness_score, avg_response_ms, "
-        "generation_before, generation_after, notes "
-        "FROM evolution_log ORDER BY timestamp DESC LIMIT 30"
-    )
-    if not rows:
-        return ('<table><thead><tr><th>時間</th><th>事件類型</th><th>群組 JID</th>'
-                '<th>適應度</th><th>平均回應</th><th>世代</th><th>備注</th></tr></thead>'
-                '<tbody>' + _empty_row(7) + '</tbody></table>')
-    color_map = {
-        "genome_evolved": "#4ade80",
-        "genome_unchanged": "#94a3b8",
-        "cycle_start": "#60a5fa",
-        "cycle_end": "#a78bfa",
-        "skipped_low_samples": "#f59e0b",
-    }
-    body = ""
-    for entry in rows:
-        ts = str(entry.get("timestamp", ""))[:19]
-        jid = entry.get("jid", "")
-        etype = entry.get("event_type", "")
-        fitness = entry.get("fitness_score")
-        fitness_str = f"{fitness:.3f}" if fitness is not None else "-"
-        avg_ms = entry.get("avg_response_ms")
-        ms_str = f"{avg_ms:.0f}ms" if avg_ms is not None else "-"
-        gen_b = entry.get("generation_before")
-        gen_a = entry.get("generation_after")
-        gen_str = f"{gen_b}&rarr;{gen_a}" if gen_b is not None else "-"
-        notes = _esc(entry.get("notes", ""))
-        color = color_map.get(etype, "#e2e8f0")
-        body += (f"<tr>"
-                 f"<td style='color:#94a3b8'>{_esc(ts)}</td>"
-                 f"<td style='color:{color}'>{_esc(etype)}</td>"
-                 f"<td style='color:#e2e8f0;font-size:11px'>{_esc(jid)}</td>"
-                 f"<td style='color:#fbbf24'>{fitness_str}</td>"
-                 f"<td style='color:#60a5fa'>{ms_str}</td>"
-                 f"<td style='color:#a78bfa'>{gen_str}</td>"
-                 f"<td style='color:#94a3b8;font-size:11px'>{notes}</td>"
-                 f"</tr>")
-    return (f'<table><thead><tr><th>時間</th><th>事件類型</th><th>群組 JID</th>'
-            f'<th>適應度</th><th>平均回應</th><th>世代</th><th>備注</th></tr></thead>'
-            f'<tbody>{body}</tbody></table>')
-
-
-def _build_immune_table():
-    rows = _fetch(
-        "SELECT sender_jid, threat_type, count, blocked, last_seen "
-        "FROM immune_threats WHERE blocked=1 OR count > 3 "
-        "ORDER BY blocked DESC, count DESC"
-    )
-    if not rows:
-        return ('<table><thead><tr><th>sender_jid</th><th>threat_type</th>'
-                '<th>count</th><th>blocked</th><th>last_seen</th></tr></thead>'
-                '<tbody>' + _empty_row(5) + '</tbody></table>')
-    body = ""
-    for r in rows:
-        blocked = r.get("blocked")
-        body += (f"<tr>"
-                 f"<td>{_esc(r.get('sender_jid'))}</td>"
-                 f"<td>{_esc(r.get('threat_type'))}</td>"
-                 f"<td>{_esc(r.get('count'))}</td>"
-                 f"<td>{'<span class=\"badge badge-red\">BLOCKED</span>' if blocked else '<span class=\"badge badge-gray\">no</span>'}</td>"
-                 f"<td>{_fmt_dt_str(r.get('last_seen'))}</td>"
-                 f"</tr>")
-    return (f'<table><thead><tr><th>sender_jid</th><th>threat_type</th>'
-            f'<th>count</th><th>blocked</th><th>last_seen</th></tr></thead>'
-            f'<tbody>{body}</tbody></table>')
-
-
-# ── Status data ────────────────────────────────────────────────────────────────
-
-def _get_uptime():
-    """Read startup timestamp from router_state if it exists."""
-    row = _fetch_one("SELECT value FROM router_state WHERE key='startup_at'")
-    if row and row.get("value"):
+    # Memory
+    mem = {}
+    try:
+        import resource
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        mem["rss_mb"] = round(usage.ru_maxrss / 1024, 1)
+    except Exception:
         try:
-            ts = int(row["value"])
-            # Could be ms or seconds — detect by magnitude
-            if ts > 1e12:
-                ts = ts / 1000
-            return _fmt_ts_s(int(ts))
+            with open("/proc/self/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        kb = int(line.split()[1])
+                        mem["rss_mb"] = round(kb / 1024, 1)
+                        break
         except Exception:
             pass
-    return '<span class="na">unknown</span>'
+
+    return {
+        "db_path": str(config.STORE_DIR / "messages.db"),
+        "groups": groups,
+        "session_list": sessions,
+        "sessions": len(sessions),
+        "messages_today": today_msgs["c"] if today_msgs else 0,
+        "memory": mem,
+        "error_count": log_buffer.get_error_count(),
+    }
 
 
-def _get_api_status():
-    """Collect all data for the /api/status endpoint."""
+def _get_containers() -> list:
+    """Get running Docker containers matching evoclaw-* pattern."""
     try:
-        groups = _fetch("SELECT * FROM registered_groups ORDER BY folder")
-        tasks = _fetch("SELECT * FROM scheduled_tasks ORDER BY status, next_run")
-        logs = _fetch("SELECT * FROM task_run_logs ORDER BY run_at DESC LIMIT 20")
-        sessions = _fetch("SELECT * FROM sessions ORDER BY group_folder")
-        messages = _fetch("SELECT * FROM messages ORDER BY timestamp DESC LIMIT 20")
-        genome = _fetch("SELECT * FROM group_genome ORDER BY updated_at DESC")
-        immune = _fetch(
-            "SELECT * FROM immune_threats WHERE blocked=1 OR count > 3 "
-            "ORDER BY blocked DESC, count DESC"
+        result = subprocess.run(
+            ["docker", "ps", "--filter", "name=evoclaw-",
+             "--format", '{"name":"{{.Names}}","status":"{{.Status}}","image":"{{.Image}}","created_at":"{{.CreatedAt}}"}'],
+            capture_output=True, text=True, timeout=5
         )
-        return {
-            "ok": True,
-            "db_path": str(config.STORE_DIR / "messages.db"),
-            "port": config.DASHBOARD_PORT,
-            "groups": groups,
-            "tasks": tasks,
-            "logs": logs,
-            "sessions": sessions,
-            "messages": messages,
-            "genome": genome,
-            "immune": immune,
-        }
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
-
-
-# ── HTTP handler ───────────────────────────────────────────────────────────────
-
-class _DashboardHandler(http.server.BaseHTTPRequestHandler):
-    """Minimal HTTP handler serving the dashboard HTML and a JSON API."""
-
-    def log_message(self, format, *args):  # suppress default access log noise
-        pass
-
-    def do_GET(self):
-        # Check password if configured
-        if config.DASHBOARD_PASSWORD:
-            import base64
-            auth = self.headers.get("Authorization", "")
-            if auth.startswith("Basic "):
+        containers = []
+        for line in result.stdout.strip().splitlines():
+            line = line.strip()
+            if line:
                 try:
-                    decoded = base64.b64decode(auth[6:]).decode("utf-8")
-                    user, pw = decoded.split(":", 1)
-                    if user != config.DASHBOARD_USER or pw != config.DASHBOARD_PASSWORD:
-                        self._send_auth_required()
-                        return
+                    containers.append(json.loads(line))
                 except Exception:
-                    self._send_auth_required()
-                    return
-            else:
-                self._send_auth_required()
-                return
+                    pass
+        return containers
+    except Exception:
+        return []
 
-        if self.path == "/api/status":
-            self._serve_json()
-        elif self.path in ("/", "/index.html"):
-            self._serve_html()
-        elif self.path == "/health":
-            self._handle_health()
-        elif self.path == "/metrics":
-            self._handle_metrics()
-        else:
-            self.send_response(404)
-            self.end_headers()
 
-    def _send_auth_required(self):
+def _get_active_agents() -> list:
+    """Get agents currently being processed (in-process tracking)."""
+    try:
+        from .container_runner import get_active_containers
+        return get_active_containers()
+    except Exception:
+        return []
+
+
+def _get_health() -> dict:
+    """Health check: DB + Docker."""
+    checks = {}
+    status = "ok"
+    # DB
+    try:
+        db_path = config.STORE_DIR / "messages.db"
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+        conn.execute("SELECT 1").fetchone()
+        conn.close()
+        checks["database"] = "ok"
+    except Exception as e:
+        checks["database"] = f"error"
+        status = "degraded"
+    # Docker
+    try:
+        r = subprocess.run(["docker", "info"], capture_output=True, timeout=3)
+        checks["docker"] = "ok" if r.returncode == 0 else "error"
+        if r.returncode != 0:
+            status = "degraded"
+    except Exception:
+        checks["docker"] = "unavailable"
+    return {"status": status, "checks": checks}
+
+
+def _get_tasks() -> list:
+    return _fetch("SELECT * FROM scheduled_tasks ORDER BY status, next_run")
+
+
+def _get_env_vars() -> dict:
+    """Read .env file, masking secret values."""
+    sensitive = {"KEY", "TOKEN", "SECRET", "PASSWORD", "PASS", "CREDENTIAL"}
+    env_path = config.BASE_DIR / ".env"
+    result = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            masked = any(s in k.upper() for s in sensitive)
+            result[k] = {"value": "••••••" if masked else v, "masked": masked}
+    return {"vars": result}
+
+
+def _get_claude_mds() -> dict:
+    """Return all CLAUDE.md files content."""
+    files = []
+    for p in sorted(config.BASE_DIR.rglob("CLAUDE.md")):
+        try:
+            files.append({"path": str(p.relative_to(config.BASE_DIR)), "content": p.read_text(encoding="utf-8")})
+        except Exception:
+            pass
+    return {"files": files}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HTTP Handler
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _Handler(http.server.BaseHTTPRequestHandler):
+
+    def log_message(self, fmt, *args):
+        pass  # suppress access log
+
+    def _auth(self) -> bool:
+        if not config.DASHBOARD_PASSWORD:
+            return True
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(auth[6:]).decode()
+                user, pw = decoded.split(":", 1)
+                return user == config.DASHBOARD_USER and pw == config.DASHBOARD_PASSWORD
+            except Exception:
+                pass
+        return False
+
+    def _require_auth(self):
         self.send_response(401)
         self.send_header("WWW-Authenticate", 'Basic realm="EvoClaw Dashboard"')
         self.send_header("Content-Type", "text/plain")
         self.end_headers()
         self.wfile.write(b"Authentication required")
 
-    def _handle_health(self):
-        import sqlite3, time
-        health = {"status": "ok", "checks": {}}
-        # Check DB
-        try:
-            db_path = config.STORE_DIR / "messages.db"
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
-            conn.execute("SELECT 1").fetchone()
-            conn.close()
-            health["checks"]["database"] = "ok"
-        except Exception as e:
-            health["checks"]["database"] = f"error: {e}"
-            health["status"] = "degraded"
-        # Check Docker
-        import subprocess
-        try:
-            r = subprocess.run(["docker", "info"], capture_output=True, timeout=3)
-            health["checks"]["docker"] = "ok" if r.returncode == 0 else "error"
-            if r.returncode != 0:
-                health["status"] = "degraded"
-        except Exception:
-            health["checks"]["docker"] = "unavailable"
-
-        status_code = 200 if health["status"] == "ok" else 503
-        body = json.dumps(health, indent=2).encode()
-        self.send_response(status_code)
+    def _json(self, data, status=200):
+        body = json.dumps(data, default=str).encode("utf-8")
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
-    def _handle_metrics(self):
-        """Prometheus-style metrics."""
-        import sqlite3
-        lines = []
+    def _read_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", 0))
+        if length:
+            return json.loads(self.rfile.read(length))
+        return {}
+
+    def do_GET(self):
+        if not self._auth():
+            self._require_auth(); return
+
+        path = self.path.split("?")[0]
+        query = self.path[len(path)+1:] if "?" in self.path else ""
+        qs = {}
+        for part in query.split("&"):
+            if "=" in part:
+                k, _, v = part.partition("=")
+                qs[k] = v
+
+        if path == "/" or path == "/index.html":
+            shell = _SHELL.replace("PORT_PLACEHOLDER", str(config.DASHBOARD_PORT))
+            body = shell.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif path == "/api/stats":
+            self._json(_get_stats())
+        elif path == "/api/containers":
+            self._json(_get_containers())
+        elif path == "/api/agents":
+            self._json(_get_active_agents())
+        elif path == "/api/health":
+            h = _get_health()
+            self._json(h, 200 if h["status"]=="ok" else 503)
+        elif path == "/api/tasks":
+            self._json(_get_tasks())
+        elif path == "/api/env":
+            self._json(_get_env_vars())
+        elif path == "/api/claude-mds":
+            self._json(_get_claude_mds())
+        elif path == "/api/logs":
+            from . import log_buffer
+            since = int(qs.get("since", 0))
+            level = qs.get("level", "ALL")
+            limit = int(qs.get("limit", 200))
+            self._json(log_buffer.get_logs(since, level, limit))
+
+        elif path == "/api/logs/stream":
+            self._handle_sse_logs(qs.get("level", "ALL"))
+
+        elif path == "/health":
+            h = _get_health()
+            self._json(h, 200 if h["status"]=="ok" else 503)
+        elif path == "/metrics":
+            self._handle_metrics()
+        else:
+            self.send_response(404); self.end_headers()
+
+    def do_POST(self):
+        if not self._auth():
+            self._require_auth(); return
+
+        path = self.path.split("?")[0]
+
+        # POST /api/tasks/<id>/cancel
+        if path.startswith("/api/tasks/") and path.endswith("/cancel"):
+            task_id = path[len("/api/tasks/"):-len("/cancel")]
+            ok = _write_db("UPDATE scheduled_tasks SET status='cancelled' WHERE id=?", (task_id,))
+            self._json({"ok": ok})
+
+        # POST /api/tasks/<id>/update
+        elif path.startswith("/api/tasks/") and path.endswith("/update"):
+            task_id = path[len("/api/tasks/"):-len("/update")]
+            body = self._read_body()
+            sv = body.get("schedule_value", "")
+            if sv:
+                ok = _write_db("UPDATE scheduled_tasks SET schedule_value=? WHERE id=?", (sv, task_id))
+            else:
+                ok = False
+            self._json({"ok": ok})
+
+        # POST /api/containers/<name>/stop
+        elif path.startswith("/api/containers/") and path.endswith("/stop"):
+            name = path[len("/api/containers/"):-len("/stop")]
+            try:
+                subprocess.run(["docker", "stop", name], timeout=10, capture_output=True)
+                self._json({"ok": True})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)})
+
+        # POST /api/env
+        elif path == "/api/env":
+            body = self._read_body()
+            key = body.get("key", "").strip()
+            value = body.get("value", "").strip()
+            if not key or not value:
+                self._json({"ok": False, "error": "key and value required"}); return
+            env_path = config.BASE_DIR / ".env"
+            try:
+                lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+                found = False
+                new_lines = []
+                for line in lines:
+                    if line.strip().startswith(f"{key}="):
+                        new_lines.append(f'{key}="{value}"')
+                        found = True
+                    else:
+                        new_lines.append(line)
+                if not found:
+                    new_lines.append(f'{key}="{value}"')
+                env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+                self._json({"ok": True})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)})
+
+        # POST /api/claude-mds
+        elif path == "/api/claude-mds":
+            body = self._read_body()
+            rel_path = body.get("path", "")
+            content = body.get("content", "")
+            if not rel_path:
+                self._json({"ok": False, "error": "path required"}); return
+            try:
+                full = (config.BASE_DIR / rel_path).resolve()
+                # Security: must be inside BASE_DIR
+                full.relative_to(config.BASE_DIR.resolve())
+                full.write_text(content, encoding="utf-8")
+                self._json({"ok": True})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)})
+
+        else:
+            self.send_response(404); self.end_headers()
+
+    def _handle_sse_logs(self, level: str = "ALL"):
+        """Server-Sent Events endpoint for real-time log streaming."""
+        from . import log_buffer
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        last_idx = 0
         try:
-            db_path = config.STORE_DIR / "messages.db"
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
-            tables = ["messages", "scheduled_tasks", "registered_groups", "sessions", "evolution_runs", "immune_threats"]
-            for t in tables:
-                try:
-                    count = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-                    lines.append(f'evoclaw_{t}_total {count}')
-                except Exception:
-                    pass
-            conn.close()
-        except Exception:
-            pass
-        body = "\n".join(lines).encode() + b"\n"
+            while True:
+                entries = log_buffer.get_logs(since_idx=last_idx, level=level, limit=50)
+                for entry in entries:
+                    data = json.dumps(entry, default=str)
+                    self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
+                    last_idx = entry["idx"]
+                if entries:
+                    self.wfile.flush()
+                time.sleep(0.5)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # client disconnected
+
+    def _handle_metrics(self):
+        lines = []
+        tables = ["messages", "scheduled_tasks", "registered_groups", "sessions", "evolution_runs", "immune_threats"]
+        for t in tables:
+            row = _fetch_one(f"SELECT COUNT(*) as c FROM {t}")
+            if row:
+                lines.append(f"evoclaw_{t}_total {row['c']}")
+        body = ("\n".join(lines) + "\n").encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
-    def _serve_json(self):
-        data = _get_api_status()
-        body = json.dumps(data, default=str).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
-    def _serve_html(self):
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        db_path = str(config.STORE_DIR / "messages.db")
-
-        html = _HTML_TEMPLATE.format(
-            db_path=_esc(db_path),
-            uptime=_get_uptime(),
-            port=config.DASHBOARD_PORT,
-            now=now,
-            groups_table=_build_groups_table(),
-            tasks_table=_build_tasks_table(),
-            logs_table=_build_logs_table(),
-            sessions_table=_build_sessions_table(),
-            messages_table=_build_messages_table(),
-            evolution_table=_build_evolution_table(),
-            evolution_log_table=_build_evolution_log_table(),
-            immune_table=_build_immune_table(),
-        )
-        body = html.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-
-# ── Public API ─────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Public API
+# ─────────────────────────────────────────────────────────────────────────────
 
 def start_dashboard(stop_event=None):
-    """
-    Start the dashboard HTTP server in a daemon background thread.
-
-    The thread will die automatically when the main process exits.
-    An optional stop_event (asyncio.Event or threading.Event) is accepted
-    but not strictly required — the daemon thread handles cleanup on exit.
-
-    Returns the Thread object.
-    """
-    server = http.server.HTTPServer(("0.0.0.0", config.DASHBOARD_PORT), _DashboardHandler)
+    """Start the dashboard in a daemon background thread."""
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", config.DASHBOARD_PORT), _Handler)
 
     def _run():
-        import logging
-        log = logging.getLogger(__name__)
-        log.info(f"Dashboard started on http://0.0.0.0:{config.DASHBOARD_PORT}")
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+        _log.info(f"Dashboard started on http://0.0.0.0:{config.DASHBOARD_PORT}")
         try:
             server.serve_forever()
         except Exception as exc:
-            log.warning(f"Dashboard server stopped: {exc}")
+            _log.warning(f"Dashboard server stopped: {exc}")
 
     t = threading.Thread(target=_run, name="evoclaw-dashboard", daemon=True)
     t.start()

@@ -10,11 +10,23 @@ import uuid
 from pathlib import Path
 from typing import Optional, Callable, Awaitable
 
+import threading as _threading
+
 from . import config, db
 from .env import read_env_file
 from .evolution import record_run, get_adaptive_hints, get_genome_style_hints
 
 log = logging.getLogger(__name__)
+
+# ── Active container tracking (for dashboard) ─────────────────────────────────
+_active_containers: dict[str, dict] = {}  # container_name → info dict
+_active_lock = _threading.Lock()
+
+
+def get_active_containers() -> list[dict]:
+    """Return a snapshot of currently running evoclaw containers."""
+    with _active_lock:
+        return list(_active_containers.values())
 
 
 def _docker_path(p) -> str:
@@ -156,6 +168,15 @@ async def run_container_agent(
     input_json = json.dumps(input_data, ensure_ascii=True)
     # 記錄 container 啟動時間，用於計算回應時間（適應度追蹤）
     t0 = time.time()
+    with _active_lock:
+        _active_containers[container_name] = {
+            "name": container_name,
+            "folder": folder,
+            "jid": jid,
+            "run_id": run_id,
+            "started_at": int(t0 * 1000),
+            "is_scheduled": is_scheduled_task,
+        }
 
     # 讓 container 以 host 的 UID/GID 執行，確保寫入 volume 的檔案有正確的擁有者
     # os.getuid/getgid are not available on Windows — use safe fallback
@@ -268,6 +289,9 @@ async def run_container_agent(
         # 記錄異常失敗數據
         record_run(jid, run_id, response_ms, retry_count=0, success=False)
         return {"status": "error", "result": None, "error": str(e)}
+    finally:
+        with _active_lock:
+            _active_containers.pop(container_name, None)
 
 async def _stop_container(name: str) -> None:
     """發送 docker stop 指令強制停止指定 container（超時時呼叫）。"""
