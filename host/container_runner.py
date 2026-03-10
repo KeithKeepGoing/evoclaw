@@ -88,7 +88,7 @@ def _build_volume_mounts(group: dict) -> list[str]:
     # tasks/ 子目錄：建立或管理排程任務
     # input/ 子目錄：host 傳給 container 的資料（目前備用）
     ipc_dir = data_dir / "ipc" / folder
-    for sub in ["messages", "tasks", "input"]:
+    for sub in ["messages", "tasks", "input", "results"]:
         (ipc_dir / sub).mkdir(parents=True, exist_ok=True)
     mounts.append(f"{_docker_path(ipc_dir)}:/workspace/ipc:rw")
 

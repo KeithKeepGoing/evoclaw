@@ -38,6 +38,7 @@ OUTPUT_END = "---EVOCLAW_OUTPUT_END---"
 # IPC 目錄路徑（由 host 透過 Docker volume mount 對應到 data/ipc/<folder>/）
 IPC_MESSAGES_DIR = "/workspace/ipc/messages"  # agent 發送訊息給用戶
 IPC_TASKS_DIR = "/workspace/ipc/tasks"        # agent 建立排程任務
+IPC_RESULTS_DIR = "/workspace/ipc/results"
 
 # agent 的工作目錄，對應到 host 的 groups/<folder>/ 目錄
 WORKSPACE = "/workspace/group"
@@ -213,6 +214,44 @@ def tool_resume_task(task_id: str) -> str:
         return f"Task {task_id} resume request sent."
     except Exception as e:
         return f"Error: {e}"
+
+
+def tool_run_agent(prompt: str, context_mode: str = "isolated") -> str:
+    """
+    在獨立 Docker container 中執行子 agent，等待結果後回傳。
+    這是同步阻塞呼叫，父 agent 會等待子 agent 完成（最多 300 秒）。
+    context_mode: "isolated"（全新對話，無歷史）或 "group"（帶群組對話歷史）
+    """
+    import uuid as _uuid
+    try:
+        request_id = str(_uuid.uuid4())
+
+        Path(IPC_TASKS_DIR).mkdir(parents=True, exist_ok=True)
+        Path(IPC_RESULTS_DIR).mkdir(parents=True, exist_ok=True)
+
+        fname = Path(IPC_TASKS_DIR) / f"{int(time.time()*1000)}-spawn.json"
+        fname.write_text(json.dumps({
+            "type": "spawn_agent",
+            "requestId": request_id,
+            "prompt": prompt,
+            "context_mode": context_mode,
+        }), encoding="utf-8")
+
+        # Poll for result (up to 300 seconds)
+        output_path = Path(IPC_RESULTS_DIR) / f"{request_id}.json"
+        for _ in range(300):
+            if output_path.exists():
+                try:
+                    data = json.loads(output_path.read_text(encoding="utf-8"))
+                    output_path.unlink(missing_ok=True)
+                    return data.get("output", "(no output)")
+                except Exception as e:
+                    return f"Error reading subagent result: {e}"
+            time.sleep(1)
+
+        return "Error: subagent timed out after 300s"
+    except Exception as e:
+        return f"Error spawning subagent: {e}"
 
 
 def tool_glob(pattern: str, path: str = WORKSPACE) -> str:
@@ -469,6 +508,18 @@ TOOL_DECLARATIONS = [
             required=["url"],
         ),
     ),
+    types.FunctionDeclaration(
+        name="mcp__evoclaw__run_agent",
+        description="Spawn a subagent in an isolated Docker container to handle a subtask. Blocks until the subagent completes (up to 300s) and returns its output.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "prompt": types.Schema(type=types.Type.STRING, description="The task for the subagent to execute"),
+                "context_mode": types.Schema(type=types.Type.STRING, description="isolated (no history, default) or group (with conversation history)"),
+            },
+            required=["prompt"],
+        ),
+    ),
 ]
 
 
@@ -489,6 +540,7 @@ OPENAI_TOOL_DECLARATIONS = [
     {"type": "function", "function": {"name": "Glob", "description": "Find files matching a glob pattern (supports ** recursive).", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}}, "required": ["pattern"]}}},
     {"type": "function", "function": {"name": "Grep", "description": "Search file contents with regex. Returns filename:line:content.", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}, "include": {"type": "string"}}, "required": ["pattern"]}}},
     {"type": "function", "function": {"name": "WebFetch", "description": "Fetch a URL and return its content as plain text.", "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
+    {"type": "function", "function": {"name": "mcp__evoclaw__run_agent", "description": "Spawn a subagent in an isolated Docker container to handle a subtask. Blocks until complete (up to 300s) and returns its output.", "parameters": {"type": "object", "properties": {"prompt": {"type": "string", "description": "The task for the subagent"}, "context_mode": {"type": "string", "description": "isolated or group"}}, "required": ["prompt"]}}},
 ]
 
 
@@ -516,6 +568,7 @@ CLAUDE_TOOL_DECLARATIONS = [
     {"name": "Glob", "description": "Find files matching a glob pattern (supports ** recursive).", "input_schema": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}}, "required": ["pattern"]}},
     {"name": "Grep", "description": "Search file contents with regex. Returns filename:line:content.", "input_schema": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}, "include": {"type": "string"}}, "required": ["pattern"]}},
     {"name": "WebFetch", "description": "Fetch a URL and return its content as plain text.", "input_schema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
+    {"name": "mcp__evoclaw__run_agent", "description": "Spawn a subagent in an isolated Docker container to handle a subtask. Blocks until complete (up to 300s) and returns its output.", "input_schema": {"type": "object", "properties": {"prompt": {"type": "string", "description": "The task for the subagent"}, "context_mode": {"type": "string", "description": "isolated or group"}}, "required": ["prompt"]}},
 ]
 
 
@@ -614,6 +667,8 @@ def execute_tool(name: str, args: dict, chat_jid: str) -> str:
         return tool_grep(args["pattern"], args.get("path", WORKSPACE), args.get("include", "*"))
     elif name == "WebFetch":
         return tool_web_fetch(args["url"])
+    elif name == "mcp__evoclaw__run_agent":
+        return tool_run_agent(args["prompt"], args.get("context_mode", "isolated"))
     return f"Unknown tool: {name}"
 
 
@@ -880,6 +935,7 @@ def main():
         "- WebFetch: fetch any URL and read its content",
         "- mcp__evoclaw__send_message: send a message to the user",
         "- mcp__evoclaw__schedule_task / list_tasks / cancel_task / pause_task / resume_task: manage scheduled tasks",
+        "- mcp__evoclaw__run_agent: spawn a subagent to handle a subtask and return its result",
     ]
 
     # 讀取全域和群組專屬的 CLAUDE.md 設定（若存在），附加到系統提示詞末尾

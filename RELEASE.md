@@ -1,3 +1,33 @@
+## v1.6.0 — Subagent Support
+
+### What's New
+
+Agents can now spawn subagents — isolated Docker containers that handle specific subtasks and return results to the parent agent.
+
+### New Tool: `mcp__evoclaw__run_agent`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `prompt` | string | ✅ | The task for the subagent to execute |
+| `context_mode` | string | ❌ | `isolated` (default) or `group` |
+
+**Returns:** The subagent's final text output (blocks up to 300s)
+
+### Use Cases
+- Parallel research: spawn multiple subagents for different topics
+- Task delegation: hand off complex subtasks without polluting parent context
+- Isolated code execution: run risky operations in a throwaway container
+
+### How It Works
+1. Parent agent calls `mcp__evoclaw__run_agent(prompt="...")`
+2. IPC request written to `ipc/tasks/` → picked up by `ipc_watcher`
+3. Host spawns new Docker container with the subagent prompt
+4. Subagent runs its agentic loop and produces a final response
+5. Result written to `ipc/<group>/results/{request_id}.json`
+6. Parent agent receives result (polls file, timeout 300s)
+
+---
+
 # EvoClaw 發布流程規範
 
 本文件規範 EvoClaw 專案的發布流程，確保每次發布都經過完整測試與審查。

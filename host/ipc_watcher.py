@@ -9,6 +9,7 @@ from typing import Callable, Awaitable
 
 from . import config, db
 from .group_folder import is_valid_group_folder
+import asyncio as _asyncio
 
 log = logging.getLogger(__name__)
 
@@ -164,6 +165,52 @@ async def _handle_ipc(payload: dict, group_folder: str, is_main: bool, route_fn:
         flag = config.DATA_DIR / "refresh_groups.flag"
         flag.write_text("1")
         log.info("Groups refresh requested via IPC")
+
+    elif msg_type == "spawn_agent":
+        # 執行子 agent 並將結果寫回 results 目錄
+        request_id = payload.get("requestId", "")
+        prompt = payload.get("prompt", "")
+        context_mode = payload.get("context_mode", "isolated")
+        if request_id and prompt:
+            _asyncio.ensure_future(_run_subagent(request_id, prompt, context_mode, group_folder))
+
+async def _run_subagent(request_id: str, prompt: str, context_mode: str, group_folder: str) -> None:
+    """
+    在獨立 Docker container 中執行子 agent，並將結果寫入 results 目錄。
+    父 agent 透過輪詢此目錄來取得子 agent 的輸出。
+    """
+    from .container_runner import run_container_agent
+    result_dir = config.DATA_DIR / "ipc" / group_folder / "results"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    output_file = result_dir / f"{request_id}.json"
+    try:
+        groups = db.get_all_registered_groups()
+        group = next((g for g in groups if g["folder"] == group_folder), None)
+        if not group:
+            result_text = f"Error: group {group_folder} not found"
+        else:
+            conv_history = [] if context_mode == "isolated" else None
+            result = await run_container_agent(
+                group=group,
+                prompt=prompt,
+                conversation_history=conv_history,
+            )
+            result_text = result.get("result") or result.get("error") or "(no output)"
+        output_file.write_text(
+            json.dumps({"requestId": request_id, "output": result_text}),
+            encoding="utf-8"
+        )
+        log.info(f"Subagent {request_id} completed, result written to {output_file}")
+    except Exception as e:
+        log.error(f"Subagent {request_id} error: {e}")
+        try:
+            output_file.write_text(
+                json.dumps({"requestId": request_id, "output": f"Subagent error: {e}"}),
+                encoding="utf-8"
+            )
+        except Exception:
+            pass
+
 
 def _require_own_or_main(group_folder: str, target_folder: str, is_main: bool) -> None:
     """

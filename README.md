@@ -45,7 +45,7 @@
 - **原生多輪對話歷史** — 代理在每次對話中保留近期上下文記憶
 - **每群組記憶**：各群組資料夾內的 `MEMORY.md` 檔案
 - **代理集群（Agent Swarms）** — 組建專業代理團隊，協作處理複雜任務
-- 可用工具：Bash、Read、Write、Edit、Glob、Grep、WebFetch、send_message、schedule_task、list_tasks、pause_task、resume_task、cancel_task
+- 可用工具：Bash、Read、Write、Edit、Glob、Grep、WebFetch、send_message、schedule_task、list_tasks、pause_task、resume_task、cancel_task、`mcp__evoclaw__run_agent` — 在獨立容器中執行子任務，等待結果後回傳（subagent 功能）
 - **100% Python** — 無 Node.js、無 TypeScript、無編譯步驟
 - 🧬 **進化引擎** — AI 行為隨使用自動優化（詳見下方）
 - 🛡️ **增強免疫系統** — 22 種 injection pattern 檢測，防禦提示詞注入攻擊
@@ -365,7 +365,7 @@ Docker 容器（每群組獨立隔離）
   ↓
 執行 agent.py
   + Gemini / OpenAI 相容 / Claude
-  + 工具（Bash、Read、Write、Edit、Glob、Grep、WebFetch、send_message、schedule_task、list_tasks、pause_task、resume_task、cancel_task）
+  + 工具（Bash、Read、Write、Edit、Glob、Grep、WebFetch、send_message、schedule_task、list_tasks、pause_task、resume_task、cancel_task、run_agent）
   ↓
 記錄適應度 → 回應路由到正確頻道
 ```

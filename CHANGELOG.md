@@ -5,6 +5,21 @@
 格式基於 [Keep a Changelog](https://keepachangelog.com/)，
 版本號遵循 [語意化版本](https://semver.org/)。
 
+## [1.6.0] - 2026-03-10
+
+### Added
+- **Subagent support** (`mcp__evoclaw__run_agent`): agents can now spawn isolated subagents to handle subtasks and receive results synchronously
+  - Parent agent calls `mcp__evoclaw__run_agent(prompt, context_mode)` and blocks until the subagent completes (up to 300s)
+  - Subagent runs in a fully isolated Docker container with its own context
+  - Results are returned directly to the parent agent via IPC result files
+  - `context_mode`: `"isolated"` (fresh context, default) or `"group"` (with conversation history)
+
+### Changed
+- `container_runner.py`: IPC volume now includes `results/` subdirectory for subagent result passing
+- `ipc_watcher.py`: handles new `spawn_agent` IPC message type
+
+---
+
 ## [Unreleased]
 
 ### 新增
