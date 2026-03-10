@@ -1,3 +1,58 @@
+## v1.5.0 — 2026-03-10
+
+> DevEngine：7 階段 LLM 驅動自動化開發引擎
+
+### 新功能
+
+**DevEngine 完整實作**
+
+EvoClaw 現在可以真正地自主開發軟體功能。告訴 agent 你想要什麼，DevEngine 會自動完成需求分析、架構設計、程式碼撰寫、測試、審查、文件，並把檔案寫到磁碟。
+
+**7 個 LLM 驅動階段：**
+
+| 階段 | 說明 |
+|------|------|
+| 🔍 Analyze | 理解需求，定義功能範疇 |
+| 📐 Design | 設計架構、API 簽名、資料流 |
+| 💻 Implement | 撰寫完整 Python 程式碼 |
+| 🧪 Test | 撰寫 pytest 測試案例 |
+| 🔎 Review | LLM 安全審查 + 品質把關（PASS/FAIL） |
+| 📝 Document | 產生 README 章節與 CHANGELOG |
+| 🚀 Deploy | 解析 `--- FILE: path ---` 區塊，寫入磁碟 |
+
+**觸發方式：**
+
+透過 IPC（請 agent 寫入到 tasks/ 目錄）：
+```json
+{"type":"dev_task","prompt":"Add a metrics endpoint","mode":"auto"}
+```
+
+Resume 暫停的 session：
+```json
+{"type":"dev_task","session_id":"dev_1712345678_abc","prompt":""}
+```
+
+**Dashboard 整合：**
+- 新 🛠️ DevEngine 分頁（第 7 個）
+- Session 進度條（n/7 完成）
+- 各階段 Artifact 預覽、Resume / Cancel 按鈕
+
+### Bug Fixes
+
+- 修正 dev_engine.py 的 3 個嚴重錯誤（import 路徑、DB API、stage 邏輯）
+- Review 階段不再錯誤地使用 immune system
+
+### 升級方式
+
+```bash
+git pull
+python run.py
+```
+
+不需重建 Docker image（所有修改均在 host 端）。
+
+---
+
 ## v1.4.3 — 2026-03-10
 
 > Subagent 親子層級追蹤 + 即時 Container 活動捕捉

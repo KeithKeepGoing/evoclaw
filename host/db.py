@@ -169,7 +169,22 @@ def _create_tables(db: sqlite3.Connection) -> None:
     CREATE INDEX IF NOT EXISTS idx_evo_log_type ON evolution_log(event_type, timestamp);
 
 -- ── Dev Engine 資料表 ──────────────────────────────────────────────────────
--- dev_events：記錄 7 階段開發流程的事件
+-- dev_sessions：7 階段開發引擎的完整 session 記錄（含每個階段的 artifact）
+CREATE TABLE IF NOT EXISTS dev_sessions (
+    session_id   TEXT PRIMARY KEY,
+    jid          TEXT NOT NULL,
+    prompt       TEXT NOT NULL,
+    mode         TEXT NOT NULL DEFAULT 'auto',
+    status       TEXT NOT NULL DEFAULT 'pending',
+    current_stage TEXT,
+    artifacts    TEXT DEFAULT '{}',
+    error        TEXT,
+    created_at   REAL NOT NULL,
+    updated_at   REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dev_sessions_jid ON dev_sessions(jid, created_at);
+
+-- dev_events：記錄 7 階段開發流程的事件（保留供向後相容）
 CREATE TABLE IF NOT EXISTS dev_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TEXT DEFAULT (datetime('now')),

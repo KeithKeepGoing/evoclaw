@@ -5,6 +5,25 @@
 格式基於 [Keep a Changelog](https://keepachangelog.com/)，
 版本號遵循 [語意化版本](https://semver.org/)。
 
+## [1.5.0] — 2026-03-10
+
+### Features
+
+- **DevEngine 完整實作**：`host/dev_engine.py` 全面重寫，實現真正的 LLM 驅動 7 階段開發流程（Analyze → Design → Implement → Test → Review → Document → Deploy）。前 6 個階段各自以精心設計的 prompt 呼叫 LLM（透過 `run_container_agent()`），每個階段以前一階段的 artifact 為輸入；Stage 7（Deploy）在 host 進程直接解析 `--- FILE: path ---` 區塊並寫入磁碟。
+- **auto / interactive 雙模式**：`auto` 模式全自動跑完所有 7 個階段；`interactive` 模式每個階段完成後暫停，等待用戶確認後繼續。支援 session resume（跳過已完成的階段）。
+- **Session 持久化**：新增 `dev_sessions` 資料表至 SQLite（`host/db.py`），完整記錄 session 狀態、每個階段的 artifact 內容、錯誤訊息。
+- **IPC 觸發**：`host/ipc_watcher.py` 新增 `dev_task` IPC 訊息類型，agent 可透過寫入 IPC 目錄的方式觸發或 resume DevEngine session。
+- **Dashboard 🛠️ DevEngine 分頁**：`host/dashboard.py` 新增第 7 個側邊欄分頁，顯示所有 session 的進度條（n/7 完成）、各階段 artifact 預覽、Resume / Cancel 操作按鈕。新增 API：`/api/dev/sessions`、`/api/dev/session`、POST `/api/dev/resume`、POST `/api/dev/cancel`。
+
+### Bug Fixes
+
+- 修正 `dev_engine.py` 錯誤 import：`from host.container import run_in_container` → `from .container_runner import run_container_agent`
+- 修正 `db.get_connection()` → `db.get_db()`（不存在的方法）
+- 移除所有 stage 方法中的硬編碼字串輸出（原先為 TODO 佔位符）
+- 修正 Stage 5（Review）錯誤地使用 immune system 來審查程式碼 — 改為真正的 LLM code review
+
+---
+
 ## [1.4.3] — 2026-03-10
 
 ### Features

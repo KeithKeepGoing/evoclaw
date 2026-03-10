@@ -146,6 +146,9 @@ tr:nth-child(even) td{background:#1a1a2e}
     <div class="nav-item" onclick="showTab('evolution')" id="nav-evolution">
       <span class="icon">🧬</span><span>進化引擎</span>
     </div>
+    <div class="nav-item" onclick="showTab('devengine')" id="nav-devengine">
+      <span class="icon">🛠️</span><span>DevEngine</span>
+    </div>
   </div>
   <div id="main">
     <div id="tab-status"></div>
@@ -154,6 +157,7 @@ tr:nth-child(even) td{background:#1a1a2e}
     <div id="tab-settings" style="display:none"></div>
     <div id="tab-messages" style="display:none"></div>
     <div id="tab-evolution" style="display:none"></div>
+    <div id="tab-devengine" style="display:none"></div>
   </div>
 </div>
 
@@ -172,7 +176,7 @@ let _logEs = null;
 let _autoRefresh = null;
 
 function showTab(name) {
-  ['status','logs','manage','settings','messages','evolution'].forEach(t => {
+  ['status','logs','manage','settings','messages','evolution','devengine'].forEach(t => {
     document.getElementById('tab-'+t).style.display = t===name?'':'none';
     document.getElementById('nav-'+t).classList.toggle('active', t===name);
   });
@@ -185,6 +189,7 @@ function showTab(name) {
   else if (name==='settings') { loadSettings(); }
   else if (name==='messages') { loadMessages(); _autoRefresh = setInterval(loadMessages, 8000); }
   else if (name==='evolution') { loadEvolution(); _autoRefresh = setInterval(loadEvolution, 10000); }
+  else if (name==='devengine') { loadDevEngine(); _autoRefresh = setInterval(loadDevEngine, 6000); }
 }
 
 // ── Fetch helper ───────────────────────────────────────────────────────────
@@ -763,6 +768,114 @@ async function loadEvolution() {
   document.getElementById('tab-evolution').innerHTML = html;
 }
 
+// ── Tab 7: DevEngine ──────────────────────────────────────────────────────
+let _devSelectedSession = null;
+
+async function loadDevEngine() {
+  const sessions = await api('/api/dev/sessions');
+  let html = '<div class="section-title">🛠️ DevEngine — 7 階段自動化開發引擎</div>';
+
+  // How-to card
+  html += `<div class="card"><h3>📖 使用方式</h3>
+  <p style="color:#9ca3af;font-size:12px;margin-bottom:8px">
+    在聊天中使用 IPC 觸發（寫入 dev_task 訊息），或請 agent 啟動開發流程。<br>
+    Pipeline：<strong>Analyze → Design → Implement → Test → Review → Document → Deploy</strong>
+  </p>
+  <div style="background:#0a0a14;border:1px solid #2d2d4e;border-radius:4px;padding:10px;font-size:11px;color:#6b7280">
+    IPC 範例：<code style="color:#a78bfa">{"type":"dev_task","prompt":"Add a metrics endpoint","mode":"auto"}</code><br>
+    Resume：<code style="color:#a78bfa">{"type":"dev_task","session_id":"dev_1234_abc","prompt":""}</code>
+  </div>
+  </div>`;
+
+  // Stage pipeline legend
+  const STAGES = ['analyze','design','implement','test','review','document','deploy'];
+  const STAGE_ICONS = {analyze:'🔍',design:'📐',implement:'💻',test:'🧪',review:'🔎',document:'📝',deploy:'🚀'};
+
+  // Session list
+  html += '<div class="card"><h3>📋 開發 Sessions（最近 30 筆）</h3>';
+  if (sessions && sessions.length > 0) {
+    html += '<table><thead><tr><th>Session</th><th>Prompt</th><th>Mode</th><th>Status</th><th>Progress</th><th>Updated</th><th>Action</th></tr></thead><tbody>';
+    for (const s of sessions) {
+      const statusColor = {completed:'green',failed:'red',running:'yellow',paused:'blue',cancelled:'gray',pending:'gray'}[s.status] || 'gray';
+      const done = s.stages_done || 0;
+      const pct = Math.round(done/7*100);
+      const barFill = `width:${pct}%;background:${pct===100?'#34d399':'#7c3aed'};height:6px;border-radius:3px`;
+      const ts = s.updated_at ? new Date(s.updated_at*1000).toLocaleString() : '';
+      const shortId = s.session_id.replace('dev_','').substring(0,14);
+      let actions = '';
+      if (s.status === 'paused') {
+        actions += `<button class="btn btn-sm" onclick="devResume('${esc(s.session_id)}')" style="background:#3b0764;color:#c084fc;border:1px solid #7c3aed;margin-right:4px">▶ Resume</button>`;
+      }
+      if (['running','paused'].includes(s.status)) {
+        actions += `<button class="btn btn-sm btn-danger" onclick="devCancel('${esc(s.session_id)}')">✕ Cancel</button>`;
+      }
+      actions += `<button class="btn btn-sm" onclick="devShowDetail('${esc(s.session_id)}')" style="background:#1a1a2e;color:#9ca3af;border:1px solid #2d2d4e;margin-left:4px">🔍</button>`;
+      html += `<tr>
+        <td><code style="font-size:10px;color:#a78bfa">${esc(shortId)}</code></td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.prompt)}">${esc(s.prompt)}</td>
+        <td>${badge(s.mode,'gray')}</td>
+        <td>${badge(s.status,statusColor)}</td>
+        <td style="min-width:80px">
+          <div style="background:#1a1a2e;border-radius:3px;height:6px"><div style="${barFill}"></div></div>
+          <span style="font-size:10px;color:#6b7280">${done}/7</span>
+        </td>
+        <td style="font-size:10px;color:#6b7280">${esc(ts)}</td>
+        <td style="white-space:nowrap">${actions}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">尚無開發 session。請透過聊天觸發 DevEngine。</div>';
+  }
+  html += '</div>';
+
+  // Session detail (if selected)
+  if (_devSelectedSession) {
+    const detail = await api('/api/dev/session?id='+encodeURIComponent(_devSelectedSession));
+    if (detail) {
+      html += `<div class="card"><h3>🔍 Session 詳情：<code style="color:#a78bfa">${esc(detail.session_id)}</code></h3>`;
+      html += `<p style="color:#9ca3af;font-size:11px;margin-bottom:10px"><strong>Prompt:</strong> ${esc(detail.prompt)}</p>`;
+      if (detail.error) html += `<div style="background:#450a0a;border:1px solid #7f1d1d;padding:8px;border-radius:4px;color:#f87171;margin-bottom:8px;font-size:11px">❌ ${esc(detail.error)}</div>`;
+      // Stage artifact previews
+      html += '<table><thead><tr><th>Stage</th><th>Status</th><th>Preview</th></tr></thead><tbody>';
+      for (const stage of STAGES) {
+        const icon = STAGE_ICONS[stage] || '•';
+        const art = detail.artifacts ? detail.artifacts[stage] : null;
+        const isCurrent = detail.current_stage === stage && detail.status === 'running';
+        const statusIcon = art ? '✅' : (isCurrent ? '⏳' : '⬜');
+        html += `<tr${isCurrent?' style="background:#1a1a28"':''}>
+          <td>${icon} ${stage}</td>
+          <td>${statusIcon}</td>
+          <td style="font-size:10px;color:#9ca3af;max-width:400px;word-break:break-word">${art ? esc(art) : '<span class="na">—</span>'}</td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      html += `<button class="btn btn-sm" onclick="_devSelectedSession=null;loadDevEngine()" style="margin-top:8px;background:#1a1a2e;color:#6b7280;border:1px solid #2d2d4e">✕ 關閉詳情</button>`;
+      html += '</div>';
+    }
+  }
+
+  document.getElementById('tab-devengine').innerHTML = html;
+}
+
+async function devResume(sessionId) {
+  const r = await api('/api/dev/resume', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({session_id: sessionId})});
+  showMsg(r && r.ok ? '▶ Resume 已送出' : '❌ Resume 失敗', r && r.ok);
+  loadDevEngine();
+}
+
+async function devCancel(sessionId) {
+  if (!confirm('確定要取消這個 DevEngine session？')) return;
+  const r = await api('/api/dev/cancel', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({session_id: sessionId})});
+  showMsg(r && r.ok ? '✕ Session 已取消' : '❌ 取消失敗', r && r.ok);
+  loadDevEngine();
+}
+
+function devShowDetail(sessionId) {
+  _devSelectedSession = sessionId;
+  loadDevEngine();
+}
+
 // Initial load
 showTab('status');
 </script>
@@ -1086,6 +1199,22 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/logs/stream":
             self._handle_sse_logs(qs.get("level", "ALL"))
 
+        elif path == "/api/dev/sessions":
+            try:
+                from .dev_engine import list_sessions
+                self._json(list_sessions(limit=30))
+            except Exception as e:
+                self._json({"error": str(e)})
+
+        elif path == "/api/dev/session":
+            session_id = qs.get("id", "")
+            try:
+                from .dev_engine import get_session_detail
+                detail = get_session_detail(session_id) if session_id else None
+                self._json(detail or {"error": "not found"})
+            except Exception as e:
+                self._json({"error": str(e)})
+
         elif path == "/health":
             h = _get_health()
             self._json(h, 200 if h["status"]=="ok" else 503)
@@ -1148,6 +1277,48 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     new_lines.append(f'{key}="{value}"')
                 env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
                 self._json({"ok": True})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)})
+
+        # POST /api/dev/cancel
+        elif path == "/api/dev/cancel":
+            body = self._read_body()
+            session_id = body.get("session_id", "")
+            try:
+                from .dev_engine import load_session, save_session
+                session = load_session(session_id)
+                if session:
+                    session.status = "cancelled"
+                    session.current_stage = None
+                    save_session(session)
+                    self._json({"ok": True})
+                else:
+                    self._json({"ok": False, "error": "session not found"})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)})
+
+        # POST /api/dev/resume (marks paused session for resumption — actual resume via IPC)
+        elif path == "/api/dev/resume":
+            body = self._read_body()
+            session_id = body.get("session_id", "")
+            try:
+                from .dev_engine import load_session
+                session = load_session(session_id)
+                if session and session.status == "paused":
+                    # Write a dev_task IPC file to the group's tasks dir to resume via ipc_watcher
+                    ipc_dir = config.DATA_DIR / "ipc" / session.jid.replace(":", "-").replace("@", "-") / "tasks"
+                    ipc_dir.mkdir(parents=True, exist_ok=True)
+                    import json as _json, time as _time
+                    fname = ipc_dir / f"{int(_time.time()*1000)}_devresume.json"
+                    fname.write_text(_json.dumps({
+                        "type": "dev_task",
+                        "session_id": session_id,
+                        "prompt": "",
+                        "mode": session.mode,
+                    }), encoding="utf-8")
+                    self._json({"ok": True})
+                else:
+                    self._json({"ok": False, "error": "session not found or not paused"})
             except Exception as e:
                 self._json({"ok": False, "error": str(e)})
 

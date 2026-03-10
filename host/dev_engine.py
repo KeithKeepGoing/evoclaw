@@ -1,461 +1,594 @@
 """
-EvoClaw DevEngine: 7-Stage Self-Development Pipeline.
+EvoClaw DevEngine — 7-Stage Self-Development Pipeline.
 
-This module implements the CLI-Anything inspired 7-stage development process:
-Analyze -> Design -> Implement -> Test -> Review -> Document -> Deploy
+Pipeline: Analyze → Design → Implement → Test → Review → Document → Deploy
 
-Supports two modes:
-- Interactive (REPL): Human-in-the-loop with pause points
-- Auto (Script): Fully automated pipeline
+Modes:
+  auto        — fully automated, runs all stages sequentially
+  interactive — pauses after each stage and waits for user to "continue"
+
+Each stage (1-6) runs via Docker container so the LLM powers the generation.
+Stage 7 (Deploy) runs in the host process and writes files to disk.
 """
 
-import asyncio
 import json
+import logging
 import time
-from enum import Enum
+import uuid
 from dataclasses import dataclass, field
-from typing import Optional, Dict, List, Any
+from enum import Enum
 from pathlib import Path
+from typing import Any, Awaitable, Callable, Dict, Optional
 
-from host import log, db
-from host.evolution import immune
-from host.container import run_in_container
+from . import config, db
+
+log = logging.getLogger(__name__)
+
+
+# ── Stage definitions ─────────────────────────────────────────────────────────
 
 class DevStage(Enum):
-    """Development pipeline stages."""
-    ANALYZE = "analyze"
-    DESIGN = "design"
+    ANALYZE   = "analyze"
+    DESIGN    = "design"
     IMPLEMENT = "implement"
-    TEST = "test"
-    REVIEW = "review"
-    DOCUMENT = "document"
-    DEPLOY = "deploy"
+    TEST      = "test"
+    REVIEW    = "review"
+    DOCUMENT  = "document"
+    DEPLOY    = "deploy"
+
+STAGE_ORDER: list[DevStage] = list(DevStage)
+
+
+# ── Data model ────────────────────────────────────────────────────────────────
 
 @dataclass
-class DevArtifact:
-    """Artifact produced at each stage."""
-    stage: DevStage
-    content: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    timestamp: float = field(default_factory=time.time)
-
-@dataclass
-class DevContext:
-    """Context for a development session."""
+class DevSession:
     session_id: str
     prompt: str
     jid: str
-    mode: str  # 'interactive' or 'auto'
-    artifacts: Dict[DevStage, DevArtifact] = field(default_factory=dict)
-    current_stage: Optional[DevStage] = None
-    status: str = "pending"  # pending, running, paused, completed, failed
-    error_message: Optional[str] = None
+    mode: str                                        # "auto" | "interactive"
+    artifacts: Dict[str, str] = field(default_factory=dict)  # stage_name → content
+    current_stage: Optional[str] = None
+    status: str = "pending"                          # pending/running/paused/completed/failed
+    error: Optional[str] = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+
+
+# ── DB helpers ────────────────────────────────────────────────────────────────
+
+def _ensure_table() -> None:
+    """Create dev_sessions table if it doesn't exist yet."""
+    conn = db.get_db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dev_sessions (
+            session_id   TEXT PRIMARY KEY,
+            jid          TEXT NOT NULL,
+            prompt       TEXT NOT NULL,
+            mode         TEXT NOT NULL DEFAULT 'auto',
+            status       TEXT NOT NULL DEFAULT 'pending',
+            current_stage TEXT,
+            artifacts    TEXT DEFAULT '{}',
+            error        TEXT,
+            created_at   REAL NOT NULL,
+            updated_at   REAL NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_dev_sessions_jid ON dev_sessions(jid, created_at)")
+    conn.commit()
+
+
+def save_session(session: DevSession) -> None:
+    session.updated_at = time.time()
+    try:
+        _ensure_table()
+        conn = db.get_db()
+        conn.execute("""
+            INSERT OR REPLACE INTO dev_sessions
+            (session_id, jid, prompt, mode, status, current_stage, artifacts, error, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            session.session_id, session.jid, session.prompt, session.mode,
+            session.status, session.current_stage,
+            json.dumps(session.artifacts, ensure_ascii=False),
+            session.error, session.created_at, session.updated_at,
+        ))
+        conn.commit()
+    except Exception as e:
+        log.error(f"DevEngine: save_session failed: {e}")
+
+
+def load_session(session_id: str) -> Optional[DevSession]:
+    try:
+        _ensure_table()
+        conn = db.get_db()
+        row = conn.execute(
+            "SELECT * FROM dev_sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return DevSession(
+            session_id=row["session_id"],
+            jid=row["jid"],
+            prompt=row["prompt"],
+            mode=row["mode"],
+            status=row["status"],
+            current_stage=row["current_stage"],
+            artifacts=json.loads(row["artifacts"] or "{}"),
+            error=row["error"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+    except Exception as e:
+        log.error(f"DevEngine: load_session failed: {e}")
+        return None
+
+
+def list_sessions(jid: Optional[str] = None, limit: int = 30) -> list[dict]:
+    """Return recent sessions as plain dicts (for dashboard)."""
+    try:
+        _ensure_table()
+        conn = db.get_db()
+        if jid:
+            rows = conn.execute(
+                "SELECT * FROM dev_sessions WHERE jid=? ORDER BY created_at DESC LIMIT ?",
+                (jid, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM dev_sessions ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        result = []
+        for r in rows:
+            artifacts = json.loads(r["artifacts"] or "{}")
+            result.append({
+                "session_id":    r["session_id"],
+                "jid":           r["jid"],
+                "prompt":        r["prompt"][:120],
+                "mode":          r["mode"],
+                "status":        r["status"],
+                "current_stage": r["current_stage"],
+                "stages_done":   len(artifacts),
+                "error":         r["error"],
+                "created_at":    r["created_at"],
+                "updated_at":    r["updated_at"],
+            })
+        return result
+    except Exception as e:
+        log.error(f"DevEngine: list_sessions failed: {e}")
+        return []
+
+
+def get_session_detail(session_id: str) -> Optional[dict]:
+    """Return full session including artifact previews."""
+    s = load_session(session_id)
+    if not s:
+        return None
+    return {
+        "session_id":    s.session_id,
+        "jid":           s.jid,
+        "prompt":        s.prompt,
+        "mode":          s.mode,
+        "status":        s.status,
+        "current_stage": s.current_stage,
+        "error":         s.error,
+        "created_at":    s.created_at,
+        "updated_at":    s.updated_at,
+        "artifacts": {
+            stage: content[:500] + ("..." if len(content) > 500 else "")
+            for stage, content in s.artifacts.items()
+        },
+    }
+
+
+# ── Stage prompts ─────────────────────────────────────────────────────────────
+
+def _build_prompt(stage: DevStage, session: DevSession) -> str:
+    arts = session.artifacts
+    req  = arts.get("analyze",   "(no requirements yet)")
+    des  = arts.get("design",    "(no design yet)")
+    impl = arts.get("implement", "(no implementation yet)")
+    test = arts.get("test",      "(no tests yet)")
+    rev  = arts.get("review",    "(no review yet)")
+    doc  = arts.get("document",  "(no docs yet)")
+
+    if stage == DevStage.ANALYZE:
+        return f"""You are a software requirements analyst working on the EvoClaw AI assistant framework (Python, Docker, SQLite, asyncio).
+
+The user wants to build:
+> {session.prompt}
+
+Produce a clear, actionable requirements document in markdown:
+
+## Summary
+2-3 sentences describing what will be built.
+
+## Key Features
+Bulleted list of specific features to implement.
+
+## Technical Constraints
+Language, compatibility, performance requirements.
+
+## Files to Create or Modify
+Exact file paths relative to the project root (e.g., `host/dev_engine.py`, `host/dashboard.py`).
+
+## Success Criteria
+How to verify the feature works correctly.
+
+Be specific and concrete. No vague language."""
+
+    elif stage == DevStage.DESIGN:
+        return f"""You are a software architect working on the EvoClaw AI assistant framework.
+
+Requirements:
+{req}
+
+Produce a detailed technical design document in markdown:
+
+## Architecture Overview
+How this fits into the existing EvoClaw host/ structure.
+
+## Module Structure
+For each file to create or modify, describe its responsibilities.
+
+## Key Classes and Functions
+Signatures, parameters, return types, and purpose.
+
+## Data Flow
+Step-by-step how data flows through the feature.
+
+## Integration Points
+How this connects to: main.py, db.py, dashboard.py, ipc_watcher.py, container_runner.py.
+
+## Database Schema
+Any new tables or columns needed (include CREATE TABLE SQL).
+
+Be precise. Include real function signatures."""
+
+    elif stage == DevStage.IMPLEMENT:
+        return f"""You are a senior Python developer implementing a feature for EvoClaw.
+
+Requirements:
+{req}
+
+Design:
+{des}
+
+Write the complete, production-ready Python implementation.
+
+Rules:
+- Full file contents with all imports
+- Docstrings on all public functions and classes
+- Proper error handling with try/except and logging
+- Type hints throughout
+- No TODOs, no placeholders — real working code only
+
+Format each file as:
+--- FILE: host/example.py ---
+(complete file contents)
+--- END FILE ---
+
+If modifying an existing file, output the complete modified file."""
+
+    elif stage == DevStage.TEST:
+        return f"""You are a QA engineer writing tests for EvoClaw.
+
+Implementation:
+{impl}
+
+Write comprehensive pytest test files:
+- Test all public functions and classes
+- Include happy path, edge cases, and error conditions
+- Mock external dependencies (Docker subprocess, SQLite, network calls)
+- Use pytest fixtures for common setup
+
+Format each file as:
+--- FILE: tests/test_example.py ---
+(complete test file)
+--- END FILE ---
+
+After the files, add:
+## Test Plan Summary
+Brief description of what is covered and any manual verification steps."""
+
+    elif stage == DevStage.REVIEW:
+        return f"""You are a senior code reviewer. Review this implementation for quality, security, and correctness.
+
+Implementation:
+{impl}
+
+Tests:
+{test}
+
+Produce a review report:
+
+## Overall Assessment
+PASS or FAIL — one sentence justification.
+
+## Security Issues
+Any vulnerabilities: path traversal, injection, credential exposure, unsafe eval/exec, etc.
+Be specific with file and line references.
+
+## Code Quality
+Error handling gaps, missing edge cases, style issues.
+
+## Performance
+Any obvious bottlenecks or resource leaks.
+
+## Required Changes
+Specific fixes needed if FAIL. Include corrected code snippets.
+
+## Approved Items
+What looks good and is confirmed LGTM.
+
+Be strict. If there are real issues, mark FAIL."""
+
+    elif stage == DevStage.DOCUMENT:
+        return f"""You are a technical writer documenting a new EvoClaw feature.
+
+Requirements:
+{req}
+
+Design:
+{des}
+
+Review result:
+{rev}
+
+Produce:
+
+## README Section
+A markdown section suitable for insertion into README.md. Explain what the feature does and how to use it.
+
+## CHANGELOG Entry
+A [X.Y.Z] — YYYY-MM-DD changelog entry following Keep-a-Changelog format.
+
+## Usage Examples
+Concrete examples of how to trigger/use the feature."""
+
+    elif stage == DevStage.DEPLOY:
+        return f"""You are a DevOps engineer preparing deployment for a new EvoClaw feature.
+
+Implementation:
+{impl}
+
+Documentation:
+{doc}
+
+Produce:
+
+## Files to Write
+List each file path and whether it's a new file or modification.
+
+## Deployment Steps
+Ordered steps to deploy (git add, commit message, any migrations needed).
+
+## Verification
+Commands to verify the feature works after deployment.
+
+## Rollback Plan
+How to revert if something breaks.
+
+Note: The host process will write the actual files. Your output is the deployment manifest."""
+
+    return f"Stage {stage.value}: {session.prompt}"
+
+
+# ── Stage execution ───────────────────────────────────────────────────────────
+
+async def _run_llm_stage(stage: DevStage, session: DevSession, group: dict) -> Optional[str]:
+    """Run a single stage via Docker container. Returns artifact text or None."""
+    from .container_runner import run_container_agent
+
+    prompt = _build_prompt(stage, session)
+    log.info(f"DevEngine [{session.session_id}] stage={stage.value} group={group['folder']}")
+
+    try:
+        result = await run_container_agent(
+            group=group,
+            prompt=prompt,
+            is_scheduled_task=False,
+            conversation_history=[],          # isolated per-stage context
+        )
+        text = (result.get("result") or "").strip()
+        if not text:
+            log.warning(f"DevEngine stage {stage.value}: empty LLM output (status={result.get('status')})")
+            return None
+        return text
+    except Exception as e:
+        log.error(f"DevEngine stage {stage.value} exception: {e}")
+        return None
+
+
+def _deploy_files(session: DevSession) -> tuple[bool, str]:
+    """
+    Stage 7 (host-process): parse '--- FILE: path ---' blocks from the
+    implement artifact and write them to disk within the project root.
+    Returns (success, summary_message).
+    """
+    written: list[str] = []
+    errors:  list[str] = []
+    base = config.BASE_DIR.resolve()
+
+    for artifact_key in ("implement", "document"):
+        content = session.artifacts.get(artifact_key, "")
+        if not content:
+            continue
+        lines = content.splitlines()
+        current_file: Optional[str] = None
+        current_lines: list[str] = []
+
+        for line in lines:
+            if line.startswith("--- FILE:") and line.rstrip().endswith("---"):
+                # flush previous block
+                if current_file and current_lines:
+                    _write_one_file(base, current_file, "\n".join(current_lines), written, errors)
+                current_file = line[9:].rstrip()[:-3].strip()
+                current_lines = []
+            elif line.strip() == "--- END FILE ---":
+                if current_file and current_lines:
+                    _write_one_file(base, current_file, "\n".join(current_lines), written, errors)
+                current_file = None
+                current_lines = []
+            elif current_file is not None:
+                current_lines.append(line)
+        # flush trailing block if no END FILE marker
+        if current_file and current_lines:
+            _write_one_file(base, current_file, "\n".join(current_lines), written, errors)
+
+    if not written and not errors:
+        return True, "No --- FILE: --- blocks found. Manual deployment may be required."
+
+    summary = f"Wrote {len(written)} file(s): {', '.join(written)}"
+    if errors:
+        summary += f" | {len(errors)} error(s): {', '.join(errors)}"
+    return len(errors) == 0, summary
+
+
+def _write_one_file(
+    base: Path, rel_path: str, content: str,
+    written: list[str], errors: list[str],
+) -> None:
+    """Write a single file, enforcing that it stays within base directory."""
+    try:
+        target = (base / rel_path).resolve()
+        if not str(target).startswith(str(base)):
+            errors.append(f"BLOCKED path traversal: {rel_path}")
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        written.append(rel_path)
+        log.info(f"DevEngine deployed: {rel_path}")
+    except Exception as e:
+        errors.append(f"{rel_path}: {e}")
+        log.error(f"DevEngine deploy error for {rel_path}: {e}")
+
+
+# ── Main engine class ─────────────────────────────────────────────────────────
 
 class DevEngine:
     """
     EvoClaw Development Engine.
-    
-    Implements a 7-stage pipeline for autonomous tool development:
-    1. Analyze: Understand requirements
-    2. Design: Create architecture spec
-    3. Implement: Write code
-    4. Test: Run tests
-    5. Review: Security audit (immune system)
-    6. Document: Generate docs
-    7. Deploy: Commit and reload
+
+    Usage:
+        engine = DevEngine(jid="<group-jid>")
+        session = await engine.start("Add a metrics endpoint to the dashboard")
+        await engine.run(session, group=main_group, notify_fn=send_message)
     """
-    
+
     def __init__(self, jid: str):
         self.jid = jid
-        self.context: Optional[DevContext] = None
-        self._stage_methods = {
-            DevStage.ANALYZE: self._stage_analyze,
-            DevStage.DESIGN: self._stage_design,
-            DevStage.IMPLEMENT: self._stage_implement,
-            DevStage.TEST: self._stage_test,
-            DevStage.REVIEW: self._stage_review,
-            DevStage.DOCUMENT: self._stage_document,
-            DevStage.DEPLOY: self._stage_deploy,
-        }
-    
-    async def start_session(self, prompt: str, mode: str = "auto") -> str:
-        """Start a new development session."""
-        session_id = f"dev_{int(time.time())}"
-        self.context = DevContext(
-            session_id=session_id,
+
+    async def start(self, prompt: str, mode: str = "auto") -> DevSession:
+        """Create a new session and persist it."""
+        session = DevSession(
+            session_id=f"dev_{int(time.time())}_{uuid.uuid4().hex[:6]}",
             prompt=prompt,
             jid=self.jid,
             mode=mode,
         )
-        
-        # Persist session
-        self._save_session()
-        log.info(f"Dev session started: {session_id} (mode={mode})")
-        
-        return session_id
-    
-    def _save_session(self):
-        """Save session state to database."""
-        if not self.context:
-            return
-        
-        conn = db.get_connection()
-        try:
-            # Create table if not exists
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS dev_sessions (
-                    session_id TEXT PRIMARY KEY,
-                    jid TEXT,
-                    prompt TEXT,
-                    mode TEXT,
-                    status TEXT,
-                    current_stage TEXT,
-                    artifacts TEXT,
-                    error_message TEXT,
-                    created_at REAL,
-                    updated_at REAL
-                )
-            """)
-            
-            # Serialize artifacts
-            artifacts_json = json.dumps({
-                stage.name: {
-                    'stage': stage.name,
-                    'content': artifact.content,
-                    'metadata': artifact.metadata,
-                    'timestamp': artifact.timestamp
-                }
-                for stage, artifact in self.context.artifacts.items()
-            })
-            
-            conn.execute("""
-                INSERT OR REPLACE INTO dev_sessions 
-                (session_id, jid, prompt, mode, status, current_stage, artifacts, error_message, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                self.context.session_id,
-                self.context.jid,
-                self.context.prompt,
-                self.context.mode,
-                self.context.status,
-                self.context.current_stage.name if self.context.current_stage else None,
-                artifacts_json,
-                self.context.error_message,
-                self.context.created_at,
-                self.context.updated_at
-            ))
-            conn.commit()
-        except Exception as e:
-            log.error(f"Failed to save dev session: {e}")
-        finally:
-            conn.close()
-    
-    def _load_session(self, session_id: str) -> bool:
-        """Load session from database."""
-        conn = db.get_connection()
-        try:
-            row = conn.execute(
-                "SELECT * FROM dev_sessions WHERE session_id = ?",
-                (session_id,)
-            ).fetchone()
-            
-            if not row:
-                return False
-            
-            # Reconstruct context
-            self.context = DevContext(
-                session_id=row[0],
-                prompt=row[2],
-                jid=row[1],
-                mode=row[3],
-                status=row[4],
-                current_stage=DevStage(row[5]) if row[5] else None,
-                error_message=row[7],
-                created_at=row[8],
-                updated_at=row[9]
-            )
-            
-            # Deserialize artifacts
-            if row[6]:
-                artifacts_data = json.loads(row[6])
-                for stage_name, artifact_data in artifacts_data.items():
-                    stage = DevStage[stage_name]
-                    self.context.artifacts[stage] = DevArtifact(
-                        stage=stage,
-                        content=artifact_data['content'],
-                        metadata=artifact_data.get('metadata', {}),
-                        timestamp=artifact_data.get('timestamp', time.time())
-                    )
-            
-            return True
-        except Exception as e:
-            log.error(f"Failed to load dev session: {e}")
-            return False
-        finally:
-            conn.close()
-    
-    async def run_pipeline(self, session_id: Optional[str] = None) -> bool:
-        """Execute the full 7-stage pipeline."""
-        if not self.context:
-            if session_id:
-                if not self._load_session(session_id):
-                    log.error(f"Session not found: {session_id}")
+        save_session(session)
+        log.info(f"DevEngine: new session {session.session_id} mode={mode}")
+        return session
+
+    async def run(
+        self,
+        session: DevSession,
+        group: dict,
+        notify_fn: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> bool:
+        """
+        Execute (or resume) the pipeline.
+
+        In interactive mode, returns True after each stage completes and sets
+        status='paused'. The caller must call resume() to continue.
+        """
+        session.status = "running"
+        save_session(session)
+
+        async def _notify(text: str) -> None:
+            if notify_fn:
+                try:
+                    await notify_fn(text)
+                except Exception:
+                    pass
+
+        for stage in STAGE_ORDER:
+            # Skip stages already completed (enables resume)
+            if stage.value in session.artifacts:
+                log.debug(f"DevEngine: skip {stage.value} (already done)")
+                continue
+
+            session.current_stage = stage.value
+            save_session(session)
+
+            await _notify(f"🔧 *[{stage.value.upper()}]* 開始執行...")
+
+            if stage == DevStage.DEPLOY:
+                ok, msg = _deploy_files(session)
+                artifact = f"{'✅' if ok else '⚠️'} {msg}"
+                if not ok:
+                    session.status = "failed"
+                    session.error = msg
+                    save_session(session)
+                    await _notify(f"❌ Deploy 失敗：{msg}")
                     return False
             else:
-                log.error("No active session")
-                return False
-        
-        self.context.status = "running"
-        self._save_session()
-        
-        stages = list(DevStage)
-        
-        for stage in stages:
-            self.context.current_stage = stage
-            self._save_session()
-            
-            log.info(f"DevEngine: Starting stage {stage.value}")
-            
-            try:
-                # Execute stage
-                stage_method = self._stage_methods[stage]
-                success = await stage_method()
-                
-                if not success:
-                    self.context.status = "failed"
-                    self.context.error_message = f"Stage {stage.value} failed"
-                    self._save_session()
-                    log.error(f"DevEngine: Stage {stage.value} failed")
+                artifact = await _run_llm_stage(stage, session, group)
+                if not artifact:
+                    session.status = "failed"
+                    session.error = f"Stage {stage.value} returned no output"
+                    save_session(session)
+                    await _notify(f"❌ *[{stage.value.upper()}]* 失敗（LLM 無輸出）")
                     return False
-                
-                log.info(f"DevEngine: Completed stage {stage.value}")
-                
-                # Interactive mode: pause after each stage
-                if self.context.mode == "interactive":
-                    self.context.status = "paused"
-                    self._save_session()
-                    log.info(f"DevEngine: Paused for user input after {stage.value}")
-                    # Wait for user continuation (handled externally)
-                    # This is a placeholder - actual waiting is managed by the caller
-                    await self._wait_for_user_input()
-                    self.context.status = "running"
-                    self._save_session()
-                    
-            except Exception as e:
-                self.context.status = "failed"
-                self.context.error_message = str(e)
-                self._save_session()
-                log.error(f"DevEngine: Exception in stage {stage.value}: {e}")
-                return False
-        
-        self.context.status = "completed"
-        self.context.current_stage = None
-        self._save_session()
-        log.info(f"DevEngine: Pipeline completed for session {self.context.session_id}")
-        return True
-    
-    async def _stage_analyze(self) -> bool:
-        """Stage 1: Analyze requirements."""
-        prompt = self.context.prompt
-        # Use LLM to analyze requirements (simplified)
-        analysis = f"""# Requirements Analysis
 
-**Original Prompt:** {prompt}
+            session.artifacts[stage.value] = artifact
+            save_session(session)
+            await _notify(f"✅ *[{stage.value.upper()}]* 完成")
 
-**Key Requirements:**
-1. Implement functionality based on user request
-2. Ensure compatibility with EvoClaw framework
-3. Follow security best practices
+            # Interactive mode: pause and let caller resume
+            if session.mode == "interactive":
+                session.status = "paused"
+                save_session(session)
+                await _notify(
+                    f"⏸ 已暫停。查看 artifact 後回覆 `continue {session.session_id}` 繼續，"
+                    f"或 `cancel {session.session_id}` 取消。"
+                )
+                return True  # caller must invoke resume()
 
-**Scope:**
-- Input: User requirements
-- Output: Functional Python module
-- Constraints: Must pass immune system review
-"""
-        self.context.artifacts[DevStage.ANALYZE] = DevArtifact(
-            stage=DevStage.ANALYZE,
-            content=analysis,
-            metadata={"word_count": len(analysis.split())}
+        session.status = "completed"
+        session.current_stage = None
+        save_session(session)
+        stages_done = len(session.artifacts)
+        await _notify(
+            f"🎉 *DevEngine 完成！* {stages_done}/7 個階段全部通過。\n"
+            f"Session ID: `{session.session_id}`"
         )
         return True
-    
-    async def _stage_design(self) -> bool:
-        """Stage 2: Design architecture."""
-        # Use LLM to create design spec (simplified)
-        design = f"""# Design Specification
 
-## Module Structure
-- `host/tools/custom_tool.py`: Main implementation
-- `tests/test_custom_tool.py`: Unit tests
-
-## API Design
-- Function: `execute_tool(params: dict) -> dict`
-- Return: JSON-serializable result
-
-## Data Flow
-1. Receive input from Agent
-2. Process request
-3. Return result
-"""
-        self.context.artifacts[DevStage.DESIGN] = DevArtifact(
-            stage=DevStage.DESIGN,
-            content=design,
-            metadata={"components": ["custom_tool.py", "test_custom_tool.py"]}
-        )
-        return True
-    
-    async def _stage_implement(self) -> bool:
-        """Stage 3: Implement code."""
-        # Use LLM to generate code (simplified placeholder)
-        code = '''"""Custom Tool for EvoClaw."""
-
-def execute_tool(params: dict) -> dict:
-    """Execute the custom tool.
-    
-    Args:
-        params: Input parameters
-        
-    Returns:
-        Result dictionary
-    """
-    # TODO: Implement actual logic
-    return {"status": "success", "message": "Tool executed"}
-
-if __name__ == "__main__":
-    print(execute_tool({}))
-'''
-        self.context.artifacts[DevStage.IMPLEMENT] = DevArtifact(
-            stage=DevStage.IMPLEMENT,
-            content=code,
-            metadata={"lines": len(code.splitlines()), "language": "python"}
-        )
-        return True
-    
-    async def _stage_test(self) -> bool:
-        """Stage 4: Run tests."""
-        # Generate test code
-        test_code = '''"""Tests for custom tool."""
-import unittest
-
-class TestCustomTool(unittest.TestCase):
-    def test_execute_tool(self):
-        from host.tools.custom_tool import execute_tool
-        result = execute_tool({})
-        self.assertEqual(result["status"], "success")
-
-if __name__ == "__main__":
-    unittest.main()
-'''
-        # In real implementation, run pytest/unittest
-        # For now, assume success
-        self.context.artifacts[DevStage.TEST] = DevArtifact(
-            stage=DevStage.TEST,
-            content=test_code,
-            metadata={"test_count": 1, "passed": True}
-        )
-        return True
-    
-    async def _stage_review(self) -> bool:
-        """Stage 5: Security review (immune system)."""
-        code_artifact = self.context.artifacts.get(DevStage.IMPLEMENT)
-        if not code_artifact:
-            log.error("No code to review")
+    async def resume(
+        self,
+        session_id: str,
+        group: dict,
+        notify_fn: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> bool:
+        """Resume a paused session."""
+        session = load_session(session_id)
+        if not session:
+            log.error(f"DevEngine: session not found: {session_id}")
             return False
-        
-        code = code_artifact.content
-        
-        # Use immune system to check for injections
-        # Note: immune.check_injection is for user input, but we can adapt it
-        # For code review, we check for dangerous patterns
-        if immune.check_injection(code):
-            log.error("Security review failed: Injection detected")
+        if session.status not in ("paused", "failed"):
+            log.warning(f"DevEngine: cannot resume session in status={session.status}")
             return False
-        
-        self.context.artifacts[DevStage.REVIEW] = DevArtifact(
-            stage=DevStage.REVIEW,
-            content="Security review passed. No threats detected.",
-            metadata={"threats_found": 0, "passed": True}
-        )
-        return True
-    
-    async def _stage_document(self) -> bool:
-        """Stage 6: Generate documentation."""
-        docs = f"""# Custom Tool Documentation
+        return await self.run(session, group, notify_fn)
 
-## Usage
-```python
-from host.tools.custom_tool import execute_tool
-result = execute_tool({{"param": "value"}})
-```
-
-## API Reference
-- `execute_tool(params: dict) -> dict`
-
-## Examples
-See test cases for usage examples.
-"""
-        self.context.artifacts[DevStage.DOCUMENT] = DevArtifact(
-            stage=DevStage.DOCUMENT,
-            content=docs,
-            metadata={"sections": ["Usage", "API", "Examples"]}
-        )
-        return True
-    
-    async def _stage_deploy(self) -> bool:
-        """Stage 7: Deploy (commit and reload)."""
-        # In real implementation:
-        # 1. Write files to disk
-        # 2. Git commit
-        # 3. Reload module
-        # 4. Health check
-        
-        self.context.artifacts[DevStage.DEPLOY] = DevArtifact(
-            stage=DevStage.DEPLOY,
-            content="Deployment completed successfully.",
-            metadata={"deployed": True, "timestamp": time.time()}
-        )
-        return True
-    
-    async def _wait_for_user_input(self):
-        """Wait for user input in interactive mode."""
-        # This is a placeholder - actual implementation depends on the caller
-        # In practice, this would be handled by the API or CLI
-        await asyncio.sleep(1)  # Prevent blocking
-    
-    def get_status(self) -> Dict[str, Any]:
-        """Get current session status."""
-        if not self.context:
-            return {"status": "no_session"}
-        
-        return {
-            "session_id": self.context.session_id,
-            "prompt": self.context.prompt,
-            "mode": self.context.mode,
-            "status": self.context.status,
-            "current_stage": self.context.current_stage.value if self.context.current_stage else None,
-            "artifacts": {
-                stage.name: {
-                    "content": artifact.content[:100] + "..." if len(artifact.content) > 100 else artifact.content,
-                    "metadata": artifact.metadata
-                }
-                for stage, artifact in self.context.artifacts.items()
-            },
-            "error_message": self.context.error_message,
-            "created_at": self.context.created_at,
-            "updated_at": self.context.updated_at
-        }
-    
-    async def continue_session(self, user_input: str) -> bool:
-        """Continue a paused session with user input."""
-        if not self.context or self.context.status != "paused":
+    async def cancel(self, session_id: str) -> bool:
+        """Mark a session as cancelled."""
+        session = load_session(session_id)
+        if not session:
             return False
-        
-        # Process user input (e.g., edit artifact, confirm, etc.)
-        # For now, just resume
-        self.context.status = "running"
-        self._save_session()
-        
-        # Continue pipeline
-        return await self.run_pipeline()
+        session.status = "cancelled"
+        session.current_stage = None
+        save_session(session)
+        log.info(f"DevEngine: session {session_id} cancelled")
+        return True

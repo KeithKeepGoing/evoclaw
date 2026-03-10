@@ -176,6 +176,60 @@ async def _handle_ipc(payload: dict, group_folder: str, is_main: bool, route_fn:
             parent_name = _find_parent_container(group_folder)
             _asyncio.ensure_future(_run_subagent(request_id, prompt, context_mode, group_folder, parent_name))
 
+    elif msg_type == "dev_task":
+        # 觸發 DevEngine 7 階段開發流程
+        # agent 可以寫入此 IPC 訊息來啟動自動化開發任務
+        dev_prompt = payload.get("prompt", "")
+        mode = payload.get("mode", "auto")  # "auto" | "interactive"
+        session_id = payload.get("session_id", "")  # 若提供則 resume，否則新建
+        if dev_prompt or session_id:
+            _asyncio.ensure_future(_run_dev_task(
+                dev_prompt, mode, session_id, group_folder, route_fn
+            ))
+
+async def _run_dev_task(
+    prompt: str, mode: str, session_id: str,
+    group_folder: str, route_fn,
+) -> None:
+    """
+    在背景執行 DevEngine 7 階段開發流程。
+    每個階段完成後透過 route_fn 發送進度通知給用戶。
+    """
+    from .dev_engine import DevEngine, load_session
+    try:
+        groups = db.get_all_registered_groups()
+        group = next((g for g in groups if g["folder"] == group_folder), None)
+        if not group:
+            log.error(f"DevEngine IPC: group {group_folder} not found")
+            return
+
+        jid = group["jid"]
+        engine = DevEngine(jid=jid)
+
+        async def notify(text: str) -> None:
+            try:
+                await route_fn(jid, text)
+            except Exception as e:
+                log.warning(f"DevEngine notify error: {e}")
+
+        if session_id:
+            # Resume existing session
+            session = load_session(session_id)
+            if not session:
+                await notify(f"❌ DevEngine: session `{session_id}` not found")
+                return
+            await notify(f"▶️ DevEngine resuming session `{session_id}`...")
+            await engine.resume(session_id, group=group, notify_fn=notify)
+        else:
+            # New session
+            await notify(f"🚀 DevEngine 啟動（mode={mode}）\n> {prompt[:100]}")
+            session = await engine.start(prompt=prompt, mode=mode)
+            await engine.run(session, group=group, notify_fn=notify)
+
+    except Exception as e:
+        log.error(f"DevEngine IPC error: {e}")
+
+
 def _find_parent_container(group_folder: str) -> str | None:
     """
     找出目前正在為此群組執行的主 container 名稱（用於 subagent 親子關係追蹤）。
