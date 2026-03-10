@@ -144,6 +144,36 @@ def tool_schedule_task(prompt: str, schedule_type: str, schedule_value: str, con
         return f"Error: {e}"
 
 
+def tool_list_tasks() -> str:
+    """
+    回傳此群組的排程任務清單（由 host 在啟動時透過 stdin 傳入）。
+    讓 agent 可以看到目前有哪些排程任務及其 ID。
+    """
+    tasks = _input_data.get("scheduledTasks", [])
+    if not tasks:
+        return "No scheduled tasks found."
+    return json.dumps(tasks, ensure_ascii=False, indent=2)
+
+
+def tool_cancel_task(task_id: str) -> str:
+    """
+    透過 IPC 機制取消（刪除）指定 ID 的排程任務。
+    寫入 JSON 檔案到 tasks/ 子目錄，host 的 ipc_watcher 讀取後呼叫 db.delete_task。
+    """
+    if not task_id:
+        return "Error: task_id is required."
+    try:
+        Path(IPC_TASKS_DIR).mkdir(parents=True, exist_ok=True)
+        fname = Path(IPC_TASKS_DIR) / f"{int(time.time()*1000)}-cancel.json"
+        fname.write_text(json.dumps({
+            "type": "cancel_task",
+            "task_id": task_id,
+        }), encoding="utf-8")
+        return f"Task {task_id} cancellation request sent."
+    except Exception as e:
+        return f"Error: {e}"
+
+
 # ── Tool registry ─────────────────────────────────────────────────────────────
 
 # 向 Gemini function calling API 宣告可用的工具
@@ -218,6 +248,25 @@ TOOL_DECLARATIONS = [
             required=["prompt", "schedule_type", "schedule_value"],
         ),
     ),
+    types.FunctionDeclaration(
+        name="mcp__evoclaw__list_tasks",
+        description="List all scheduled tasks for this group.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={},
+        ),
+    ),
+    types.FunctionDeclaration(
+        name="mcp__evoclaw__cancel_task",
+        description="Cancel (delete) a scheduled task by its ID.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "task_id": types.Schema(type=types.Type.STRING, description="The task ID to cancel"),
+            },
+            required=["task_id"],
+        ),
+    ),
 ]
 
 
@@ -231,6 +280,8 @@ OPENAI_TOOL_DECLARATIONS = [
     {"type": "function", "function": {"name": "Edit", "description": "Find and replace a string in a file.", "parameters": {"type": "object", "properties": {"file_path": {"type": "string", "description": "Path to the file"}, "old_string": {"type": "string", "description": "Exact text to replace"}, "new_string": {"type": "string", "description": "Replacement text"}}, "required": ["file_path", "old_string", "new_string"]}}},
     {"type": "function", "function": {"name": "mcp__evoclaw__send_message", "description": "Send a message to the user in the chat.", "parameters": {"type": "object", "properties": {"text": {"type": "string", "description": "Message text"}, "sender": {"type": "string", "description": "Optional bot name"}}, "required": ["text"]}}},
     {"type": "function", "function": {"name": "mcp__evoclaw__schedule_task", "description": "Schedule a recurring or one-time task.", "parameters": {"type": "object", "properties": {"prompt": {"type": "string", "description": "What to do when task runs"}, "schedule_type": {"type": "string", "description": "cron, interval, or once"}, "schedule_value": {"type": "string", "description": "Cron expr, ms, or ISO timestamp"}, "context_mode": {"type": "string", "description": "group or isolated"}}, "required": ["prompt", "schedule_type", "schedule_value"]}}},
+    {"type": "function", "function": {"name": "mcp__evoclaw__list_tasks", "description": "List all scheduled tasks for this group.", "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "mcp__evoclaw__cancel_task", "description": "Cancel (delete) a scheduled task by its ID.", "parameters": {"type": "object", "properties": {"task_id": {"type": "string", "description": "The task ID to cancel"}}, "required": ["task_id"]}}},
 ]
 
 
@@ -238,6 +289,9 @@ OPENAI_TOOL_DECLARATIONS = [
 # 每次 Docker 啟動都是全新 process，此 flag 只有一次生命週期
 # 用途：避免 host 讀取 result 欄位時重複發送（雙重訊息 bug）
 _messages_sent_via_tool: list = []
+
+# stdin 解析後的完整輸入資料，main() 初始化後供工具函式存取
+_input_data: dict = {}
 
 
 # Claude (Anthropic) tool declarations
@@ -248,6 +302,8 @@ CLAUDE_TOOL_DECLARATIONS = [
     {"name": "Edit", "description": "Find and replace a string in a file.", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}, "required": ["file_path", "old_string", "new_string"]}},
     {"name": "mcp__evoclaw__send_message", "description": "Send a message to the user.", "input_schema": {"type": "object", "properties": {"text": {"type": "string"}, "sender": {"type": "string"}}, "required": ["text"]}},
     {"name": "mcp__evoclaw__schedule_task", "description": "Schedule a task.", "input_schema": {"type": "object", "properties": {"prompt": {"type": "string"}, "schedule_type": {"type": "string"}, "schedule_value": {"type": "string"}, "context_mode": {"type": "string"}}, "required": ["prompt", "schedule_type", "schedule_value"]}},
+    {"name": "mcp__evoclaw__list_tasks", "description": "List all scheduled tasks for this group.", "input_schema": {"type": "object", "properties": {}}},
+    {"name": "mcp__evoclaw__cancel_task", "description": "Cancel (delete) a scheduled task by its ID.", "input_schema": {"type": "object", "properties": {"task_id": {"type": "string"}}, "required": ["task_id"]}},
 ]
 
 
@@ -332,6 +388,10 @@ def execute_tool(name: str, args: dict, chat_jid: str) -> str:
             args.get("context_mode", "group"),
             chat_jid,
         )
+    elif name == "mcp__evoclaw__list_tasks":
+        return tool_list_tasks()
+    elif name == "mcp__evoclaw__cancel_task":
+        return tool_cancel_task(args.get("task_id", ""))
     return f"Unknown tool: {name}"
 
 
@@ -518,6 +578,10 @@ def main():
     except Exception:
         emit({"status": "error", "result": None, "error": "Invalid JSON input"})
         return
+
+    # 將解析後的輸入資料存到全域變數，讓工具函式（如 tool_list_tasks）可以存取
+    global _input_data
+    _input_data = inp
 
     prompt = inp.get("prompt", "")
     group_folder = inp.get("groupFolder", "")

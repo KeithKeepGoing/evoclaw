@@ -137,6 +137,9 @@ async def run_container_agent(
         if text:
             conv_history.append({"role": role, "content": text[:800]})  # truncate long messages
 
+    # 取得此群組的排程任務清單，傳給 container 讓 agent 可以列出和取消任務
+    scheduled_tasks = db.get_all_tasks(group_folder=folder)
+
     input_data = {
         "prompt": prompt,
         "sessionId": session_id,
@@ -148,6 +151,7 @@ async def run_container_agent(
         "secrets": secrets,  # API keys 等，container 內讀取後設定為 env vars
         "evolutionHints": evolution_hints,  # 演化引擎動態注入的行為指引
         "conversationHistory": conversation_history if conversation_history is not None else conv_history,  # 最近的對話歷史，提供記憶能力
+        "scheduledTasks": scheduled_tasks,  # 此群組的排程任務清單，讓 agent 可以列出和取消
     }
     input_json = json.dumps(input_data, ensure_ascii=True)
     # 記錄 container 啟動時間，用於計算回應時間（適應度追蹤）
