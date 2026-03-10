@@ -59,6 +59,9 @@ GMAIL_POLL_INTERVAL = _env_int("GMAIL_POLL_INTERVAL", 30)
 # WhatsApp
 WHATSAPP_WEBHOOK_PORT = _env_int("WHATSAPP_WEBHOOK_PORT", 8080)
 
+# Dashboard
+DASHBOARD_PORT = _env_int("DASHBOARD_PORT", 8765)
+
 # Channels to load (comma-separated, default: telegram)
 ENABLED_CHANNELS = [c.strip() for c in os.environ.get("ENABLED_CHANNELS", "telegram").split(",")]
 

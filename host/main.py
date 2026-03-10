@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import config, db
 from .allowlist import load_sender_allowlist, is_sender_allowed
+from .dashboard import start_dashboard
 from .container_runner import run_container_agent, cleanup_orphans
 from .group_queue import GroupQueue
 from .ipc_watcher import start_ipc_watcher
@@ -259,6 +260,9 @@ async def main() -> None:
     db_path = config.STORE_DIR / "messages.db"
     db.init_database(db_path)
     _load_state()
+
+    # 啟動 Web dashboard（背景 daemon thread，port DASHBOARD_PORT）
+    start_dashboard(_stop_event)
     _cleanup_orphan_tasks()  # ← add this line
 
     # 從設定檔載入允許傳訊的發送者白名單
