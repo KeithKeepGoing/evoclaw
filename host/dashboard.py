@@ -143,6 +143,9 @@ tr:nth-child(even) td{background:#1a1a2e}
     <div class="nav-item" onclick="showTab('messages')" id="nav-messages">
       <span class="icon">💬</span><span>對話訊息</span>
     </div>
+    <div class="nav-item" onclick="showTab('evolution')" id="nav-evolution">
+      <span class="icon">🧬</span><span>進化引擎</span>
+    </div>
   </div>
   <div id="main">
     <div id="tab-status"></div>
@@ -150,6 +153,7 @@ tr:nth-child(even) td{background:#1a1a2e}
     <div id="tab-manage" style="display:none"></div>
     <div id="tab-settings" style="display:none"></div>
     <div id="tab-messages" style="display:none"></div>
+    <div id="tab-evolution" style="display:none"></div>
   </div>
 </div>
 
@@ -168,7 +172,7 @@ let _logEs = null;
 let _autoRefresh = null;
 
 function showTab(name) {
-  ['status','logs','manage','settings','messages'].forEach(t => {
+  ['status','logs','manage','settings','messages','evolution'].forEach(t => {
     document.getElementById('tab-'+t).style.display = t===name?'':'none';
     document.getElementById('nav-'+t).classList.toggle('active', t===name);
   });
@@ -180,6 +184,7 @@ function showTab(name) {
   else if (name==='manage') { loadManage(); _autoRefresh = setInterval(loadManage, 8000); }
   else if (name==='settings') { loadSettings(); }
   else if (name==='messages') { loadMessages(); _autoRefresh = setInterval(loadMessages, 8000); }
+  else if (name==='evolution') { loadEvolution(); _autoRefresh = setInterval(loadEvolution, 10000); }
 }
 
 // ── Fetch helper ───────────────────────────────────────────────────────────
@@ -331,6 +336,26 @@ async function loadStatus() {
   html += '</div>';
   html += '</div>'; // grid-2
 
+  // Immune Threats
+  const immune = await api('/api/immune');
+  html += '<div class="card"><h3>🛡 免疫威脅 (count > 3 or blocked)</h3>';
+  if (immune && immune.length > 0) {
+    html += '<table><thead><tr><th>Sender JID</th><th>Threat Type</th><th>Count</th><th>Blocked</th><th>Last Seen</th></tr></thead><tbody>';
+    for (const r of immune) {
+      html += `<tr>
+        <td style="font-size:11px">${esc(r.sender_jid)}</td>
+        <td>${esc(r.threat_type)}</td>
+        <td style="color:#f59e0b">${esc(r.count)}</td>
+        <td>${r.blocked ? badge('BLOCKED','red') : badge('no','gray')}</td>
+        <td style="font-size:10px;color:#6b7280">${esc(r.last_seen)}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">No threats detected</div>';
+  }
+  html += '</div>';
+
   document.getElementById('tab-status').innerHTML = html;
 }
 
@@ -460,6 +485,33 @@ async function loadManage() {
     html += '</tbody></table>';
   } else {
     html += '<div class="empty">No scheduled tasks</div>';
+  }
+  html += '</div>';
+
+  // Task Run Logs
+  const runLogs = await api('/api/task-run-logs');
+  html += '<div class="card"><h3>📜 任務執行日誌 (最近 20 筆)</h3>';
+  if (runLogs && runLogs.length > 0) {
+    html += '<table><thead><tr><th>Task ID</th><th>執行時間</th><th>耗時</th><th>狀態</th><th>結果 / 錯誤</th></tr></thead><tbody>';
+    for (const r of runLogs) {
+      const ts = r.run_at ? new Date(r.run_at).toLocaleString() : '—';
+      const status = r.status ? r.status.toLowerCase() : '';
+      const statusBadgeHtml = (status==='ok'||status==='success'||status==='done')
+        ? badge(r.status,'green')
+        : (status==='error'||status==='failed'||status==='timeout')
+          ? badge(r.status,'red') : badge(r.status||'—','gray');
+      const resultText = r.result || r.error || '';
+      html += `<tr>
+        <td><code style="font-size:10px">${esc(String(r.task_id||'').slice(0,8))}</code></td>
+        <td style="font-size:11px;white-space:nowrap">${esc(ts)}</td>
+        <td style="color:#60a5fa">${r.duration_ms != null ? r.duration_ms+'ms' : '—'}</td>
+        <td>${statusBadgeHtml}</td>
+        <td style="font-size:11px;max-width:300px;word-break:break-word">${esc(resultText.slice(0,200))}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">No run logs</div>';
   }
   html += '</div>';
 
@@ -627,6 +679,74 @@ async function loadMessages() {
   html += '</div>';
 
   document.getElementById('tab-messages').innerHTML = html;
+}
+
+// ── Tab 6: 進化引擎 ────────────────────────────────────────────────────────
+async function loadEvolution() {
+  const [genome, evoLog] = await Promise.all([
+    api('/api/evolution/genome'),
+    api('/api/evolution/log'),
+  ]);
+
+  let html = '<div class="section-title">🧬 進化引擎</div>';
+
+  // Group Genome (Evolution Stats)
+  html += '<div class="card"><h3>🔬 群組基因組 (Group Genome)</h3>';
+  if (genome && genome.length > 0) {
+    html += '<table><thead><tr><th>JID</th><th>回答風格</th><th>正式程度</th><th>技術深度</th><th>世代</th><th>更新時間</th></tr></thead><tbody>';
+    for (const r of genome) {
+      const styleColor = r.response_style==='concise' ? '#f59e0b' : r.response_style==='detailed' ? '#60a5fa' : '#9ca3af';
+      const formality = r.formality != null ? (r.formality*100).toFixed(0)+'%' : '—';
+      const tech = r.technical_depth != null ? (r.technical_depth*100).toFixed(0)+'%' : '—';
+      html += `<tr>
+        <td style="font-size:11px">${esc(r.jid)}</td>
+        <td style="color:${styleColor}">${esc(r.response_style)}</td>
+        <td>${formality}</td>
+        <td>${tech}</td>
+        <td style="color:#a78bfa">${esc(r.generation)}</td>
+        <td style="font-size:10px;color:#4b5563">${esc(r.updated_at)}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">No genome data yet (need 10+ runs to trigger evolution)</div>';
+  }
+  html += '</div>';
+
+  // Evolution Log
+  const colorMap = {
+    genome_evolved: '#4ade80',
+    genome_unchanged: '#94a3b8',
+    cycle_start: '#60a5fa',
+    cycle_end: '#a78bfa',
+    skipped_low_samples: '#f59e0b',
+  };
+  html += '<div class="card"><h3>📈 演化歷程日誌 (最近 30 筆)</h3>';
+  if (evoLog && evoLog.length > 0) {
+    html += '<table><thead><tr><th>時間</th><th>事件類型</th><th>JID</th><th>適應度</th><th>平均回應</th><th>世代</th><th>備注</th></tr></thead><tbody>';
+    for (const e of evoLog) {
+      const ts = e.timestamp ? String(e.timestamp).slice(0,19) : '—';
+      const color = colorMap[e.event_type] || '#e2e8f0';
+      const fitness = e.fitness_score != null ? e.fitness_score.toFixed(3) : '—';
+      const ms = e.avg_response_ms != null ? e.avg_response_ms.toFixed(0)+'ms' : '—';
+      const gen = e.generation_before != null ? `${e.generation_before}→${e.generation_after}` : '—';
+      html += `<tr>
+        <td style="color:#6b7280;font-size:10px;white-space:nowrap">${esc(ts)}</td>
+        <td style="color:${color};font-size:11px">${esc(e.event_type)}</td>
+        <td style="font-size:10px">${esc(e.jid)}</td>
+        <td style="color:#fbbf24">${fitness}</td>
+        <td style="color:#60a5fa">${ms}</td>
+        <td style="color:#a78bfa">${gen}</td>
+        <td style="font-size:10px;color:#6b7280">${esc(e.notes)}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">No evolution events yet</div>';
+  }
+  html += '</div>';
+
+  document.getElementById('tab-evolution').innerHTML = html;
 }
 
 // Initial load
@@ -911,6 +1031,36 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     "ORDER BY timestamp DESC LIMIT ?",
                     (limit,)
                 )
+            self._json(rows)
+
+        elif path == "/api/immune":
+            rows = _fetch(
+                "SELECT sender_jid, threat_type, count, blocked, last_seen "
+                "FROM immune_threats WHERE blocked=1 OR count > 3 "
+                "ORDER BY blocked DESC, count DESC"
+            )
+            self._json(rows)
+
+        elif path == "/api/task-run-logs":
+            rows = _fetch(
+                "SELECT task_id, run_at, duration_ms, status, result, error "
+                "FROM task_run_logs ORDER BY run_at DESC LIMIT 20"
+            )
+            self._json(rows)
+
+        elif path == "/api/evolution/genome":
+            rows = _fetch(
+                "SELECT jid, response_style, formality, technical_depth, generation, updated_at "
+                "FROM group_genome ORDER BY updated_at DESC"
+            )
+            self._json(rows)
+
+        elif path == "/api/evolution/log":
+            rows = _fetch(
+                "SELECT timestamp, jid, event_type, fitness_score, avg_response_ms, "
+                "generation_before, generation_after, notes "
+                "FROM evolution_log ORDER BY timestamp DESC LIMIT 30"
+            )
             self._json(rows)
 
         elif path == "/api/logs/stream":
