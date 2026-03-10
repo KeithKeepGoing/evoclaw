@@ -337,9 +337,9 @@ async def main() -> None:
                 on_chat_metadata=lambda **kw: None,
                 registered_groups=_registered_groups,
             )
+            await ch.connect()
             register_channel(ch)
             _loaded_channels.append(ch)
-            await ch.connect()
             log.info(f"Channel '{channel_name}' loaded and connected")
         except Exception as e:
             log.error(f"Failed to load channel '{channel_name}': {e}")

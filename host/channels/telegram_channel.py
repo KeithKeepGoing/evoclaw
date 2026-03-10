@@ -33,38 +33,70 @@ class TelegramChannel:
             log.warning("TELEGRAM_BOT_TOKEN not set — Telegram disabled")
             return
 
-        self._app = Application.builder().token(self._token).build()
+        import asyncio
 
-        async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-            if not update.message or not update.message.text:
-                return
-            jid = self._jid(update.effective_chat.id)
-            sender = str(update.effective_user.id) if update.effective_user else "unknown"
-            sender_name = update.effective_user.full_name if update.effective_user else "Unknown"
-            text = update.message.text
+        MAX_RETRIES = 3
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                self._app = Application.builder().token(self._token).build()
 
-            # Prepend trigger if @mention used via Telegram mention
-            groups = {g["jid"]: g for g in self._registered_groups}
-            group = groups.get(jid)
-            if group and group.get("requires_trigger", True):
-                # Add @AssistantName prefix if message starts with mention
-                if not text.lower().startswith(f"@{config.ASSISTANT_NAME.lower()}"):
-                    return  # ignore non-triggered messages
+                async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+                    if not update.message or not update.message.text:
+                        return
+                    jid = self._jid(update.effective_chat.id)
+                    sender = str(update.effective_user.id) if update.effective_user else "unknown"
+                    sender_name = update.effective_user.full_name if update.effective_user else "Unknown"
+                    text = update.message.text
 
-            await self._on_message(
-                jid=jid,
-                sender=sender,
-                sender_name=sender_name,
-                content=text,
-                is_group=update.effective_chat.type in ("group", "supergroup"),
-                channel="telegram",
-            )
+                    groups = {g["jid"]: g for g in self._registered_groups}
+                    group = groups.get(jid)
+                    if group and group.get("requires_trigger", True):
+                        if not text.lower().startswith(f"@{config.ASSISTANT_NAME.lower()}"):
+                            return
 
-        self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-        await self._app.initialize()
-        await self._app.start()
-        await self._app.updater.start_polling()
-        log.info("Telegram channel connected")
+                    await self._on_message(
+                        jid=jid,
+                        sender=sender,
+                        sender_name=sender_name,
+                        content=text,
+                        is_group=update.effective_chat.type in ("group", "supergroup"),
+                        channel="telegram",
+                    )
+
+                self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+                await self._app.initialize()
+                await self._app.start()
+                await self._app.updater.start_polling()
+                log.info("Telegram channel connected")
+                return  # success
+
+            except Exception as e:
+                err_str = str(e).lower()
+                if "conflict" in err_str:
+                    log.error(
+                        "Telegram: Conflict detected — another bot instance is already running. "
+                        "Stop the other instance and restart."
+                    )
+                    raise  # Conflict is unrecoverable, re-raise immediately
+                if attempt < MAX_RETRIES:
+                    wait = 2 ** attempt  # 2s, 4s
+                    log.warning(
+                        f"Telegram connect attempt {attempt}/{MAX_RETRIES} failed "
+                        f"({type(e).__name__}: {e}) — retrying in {wait}s"
+                    )
+                    # Clean up failed app before retry
+                    try:
+                        if self._app:
+                            await self._app.shutdown()
+                    except Exception:
+                        pass
+                    self._app = None
+                    await asyncio.sleep(wait)
+                else:
+                    log.error(
+                        f"Telegram connect failed after {MAX_RETRIES} attempts: {type(e).__name__}: {e}"
+                    )
+                    raise
 
     async def send_message(self, jid: str, text: str) -> None:
         if not self._app:
