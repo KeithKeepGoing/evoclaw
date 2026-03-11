@@ -21,6 +21,22 @@ log = logging.getLogger(__name__)
 _sessions: dict[str, dict] = {}
 _sessions_lock = threading.Lock()
 
+_SESSION_TTL_SECONDS = 3600  # 1 hour
+_poll_count = 0  # counter for lazy expiry (expire every 60 polls)
+
+
+def _expire_sessions() -> None:
+    """Remove sessions that have been idle longer than _SESSION_TTL_SECONDS."""
+    now = time.time()
+    expired = [
+        sid for sid, sess in _sessions.items()
+        if now - sess.get("last_seen", now) > _SESSION_TTL_SECONDS
+    ]
+    for sid in expired:
+        _sessions.pop(sid, None)
+    if expired:
+        log.debug("WebPortal: expired %d stale session(s)", len(expired))
+
 
 def _get_registered_groups() -> list[dict]:
     try:
@@ -75,7 +91,7 @@ class _WebPortalHandler(http.server.BaseHTTPRequestHandler):
             jid = ""
         session_id = str(uuid.uuid4())
         with _sessions_lock:
-            _sessions[session_id] = {"jid": jid, "messages": [], "created": time.time()}
+            _sessions[session_id] = {"jid": jid, "messages": [], "created": time.time(), "last_seen": time.time()}
         self._send_json({"session_id": session_id})
 
     def _api_groups(self):
@@ -84,13 +100,20 @@ class _WebPortalHandler(http.server.BaseHTTPRequestHandler):
 
     def _api_poll(self):
         """Return new messages since a given timestamp."""
+        global _poll_count
         from urllib.parse import urlparse, parse_qs
         qs = parse_qs(urlparse(self.path).query)
         session_id = qs.get("session_id", [""])[0]
         since = float(qs.get("since", ["0"])[0])
         with _sessions_lock:
-            session = _sessions.get(session_id, {})
-            msgs = [m for m in session.get("messages", []) if m["ts"] > since]
+            session = _sessions.get(session_id)
+            if session is not None:
+                session["last_seen"] = time.time()
+            msgs = [m for m in (session or {}).get("messages", []) if m["ts"] > since]
+            # Lazy expiry: run every 60 polls to avoid overhead on every request
+            _poll_count += 1
+            if _poll_count % 60 == 0:
+                _expire_sessions()
         self._send_json({"messages": msgs})
 
     def _api_send(self):

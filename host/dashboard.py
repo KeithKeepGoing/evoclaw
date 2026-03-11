@@ -1445,8 +1445,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             body = self._read_body()
             key = body.get("key", "").strip()
             value = body.get("value", "").strip()
-            if not key or not value:
-                self._json({"ok": False, "error": "key and value required"}); return
+            if not key:
+                self._json({"ok": False, "error": "key required"}); return
+            if key not in config.EDITABLE_ENV_KEYS:
+                self._json({"ok": False, "error": f"Key '{key}' is not editable via dashboard"}); return
+            # Strip control characters and newlines from value
+            value = "".join(ch for ch in value if ch not in "\r\n\x00")
             env_path = config.BASE_DIR / ".env"
             try:
                 lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []

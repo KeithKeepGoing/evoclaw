@@ -93,14 +93,18 @@ async def run_task(task: dict, get_group_fn: Callable, run_agent_fn: Callable) -
         # 失敗時仍記錄 log，但 next_run 不更新（保持原值，讓任務下次仍能執行）
         db.log_task_run(task_id, start, 0, "error", None, str(e))
 
-async def start_scheduler_loop(get_group_fn: Callable, run_agent_fn: Callable, stop_event: asyncio.Event) -> None:
+async def start_scheduler_loop(
+    get_group_fn: Callable,
+    run_agent_fn: Callable,
+    stop_event: asyncio.Event,
+    group_queue=None,   # Optional GroupQueue for per-group serialization
+) -> None:
     """
     排程器主迴圈：每隔 SCHEDULER_POLL_INTERVAL 秒檢查是否有到期的任務。
 
-    設計為「fire and forget」：對每個到期任務建立獨立的 asyncio task，
-    不等待它們完成就繼續下一輪輪詢。這讓多個任務可以平行執行，
-    也讓排程器不因某個任務執行時間過長而延誤其他任務。
-    實際的 concurrency 控制由 GroupQueue 負責（每群組一次只跑一個 container）。
+    若提供 group_queue，透過 GroupQueue.enqueue_task() 排程，確保每個群組
+    同時只有一個 container 在執行（與訊息處理共用同一個序列化佇列）。
+    若未提供（向後相容），退回到直接 create_task 的舊行為。
     """
     log.info("Task scheduler started")
     while True:
@@ -109,8 +113,18 @@ async def start_scheduler_loop(get_group_fn: Callable, run_agent_fn: Callable, s
             # 查詢所有 next_run <= now_ms 且狀態為 active 的任務
             due = db.get_due_tasks(now_ms)
             for task in due:
-                # 建立獨立 asyncio task，不 await（讓排程器繼續輪詢）
-                asyncio.create_task(run_task(task, get_group_fn, run_agent_fn))
+                if group_queue is not None:
+                    # Enqueue through GroupQueue for per-group serialization
+                    jid = task.get("chat_jid", "")
+                    task_id = task["id"]
+                    group_queue.enqueue_task(
+                        jid,
+                        task_id,
+                        lambda t=task: run_task(t, get_group_fn, run_agent_fn),
+                    )
+                else:
+                    # Fallback: direct dispatch (backward compat)
+                    asyncio.create_task(run_task(task, get_group_fn, run_agent_fn))
         except Exception as e:
             log.error(f"Scheduler error: {e}")
         try:

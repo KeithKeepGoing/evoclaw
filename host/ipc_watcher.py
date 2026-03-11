@@ -266,7 +266,14 @@ async def _handle_ipc(payload: dict, group_folder: str, is_main: bool, route_fn:
         if dev_prompt or session_id:
             groups = db.get_all_registered_groups()
             _dev_group = next((g for g in groups if g["folder"] == group_folder), None)
-            _dev_group_jid = _dev_group["jid"] if _dev_group else group_folder
+            if _dev_group:
+                _dev_group_jid = _dev_group["jid"]
+            else:
+                log.warning(
+                    "DevEngine IPC: group folder '%s' not found in registered groups — "
+                    "will attempt lookup by folder in _run_dev_task", group_folder
+                )
+                _dev_group_jid = group_folder  # pass folder as fallback, handled in _run_dev_task
             _asyncio.ensure_future(_run_dev_task(
                 {"prompt": dev_prompt, "mode": mode, "session_id": session_id},
                 _dev_group_jid,
@@ -292,8 +299,15 @@ async def _run_dev_task(payload: dict, group_jid: str, route_fn) -> None:
         groups = db.get_all_registered_groups()
         group = next((g for g in groups if g["jid"] == group_jid), None)
         if not group:
-            log.error(f"DevEngine IPC: group with jid {group_jid} not found")
-            return
+            # Check if group_jid is actually a folder (fallback from ipc handler)
+            group = next((g for g in groups if g.get("folder") == group_jid), None)
+            if not group:
+                log.error(
+                    "DevEngine IPC: cannot find group by jid or folder '%s'. "
+                    "Group may not be registered yet.",
+                    group_jid
+                )
+                return
 
         jid = group["jid"]
         engine = DevEngine(jid=jid)
@@ -452,12 +466,13 @@ def _find_parent_container(group_folder: str) -> str | None:
     回傳最早啟動的非 subagent container（parent_container is None）。
     """
     try:
-        from .container_runner import _active_containers, _active_lock
-        with _active_lock:
-            candidates = [
-                info for info in _active_containers.values()
-                if info.get("folder") == group_folder and info.get("parent_container") is None
-            ]
+        from .container_runner import _active_containers
+        # _active_containers is only mutated from the asyncio event loop thread;
+        # a GIL-safe snapshot copy is sufficient for this read-only lookup.
+        candidates = [
+            info for info in list(_active_containers.values())
+            if info.get("folder") == group_folder and info.get("parent_container") is None
+        ]
         if candidates:
             # 取最早啟動的（started_at 最小）
             return min(candidates, key=lambda x: x["started_at"])["name"]

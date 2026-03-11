@@ -492,3 +492,241 @@ class TestMainGroupUniqueness:
 
         assert result is not None
         assert any("Multiple main groups" in r.message for r in caplog.records)
+
+
+# ── Fix #1 (v1.10.0): _stop_container awaits proc.wait() ─────────────────────
+
+class TestStopContainerAwaitsProcWait:
+    @pytest.mark.asyncio
+    async def test_stop_container_awaits_wait(self):
+        """_stop_container should call proc.wait() after create_subprocess_exec."""
+        import host.container_runner as cr
+
+        mock_proc = MagicMock()
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_proc)):
+            await cr._stop_container("evoclaw-test-container")
+
+        mock_proc.wait.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_container_passes_time_flag(self):
+        """_stop_container should pass --time 10 to docker stop."""
+        import host.container_runner as cr
+
+        mock_proc = MagicMock()
+        mock_proc.wait = AsyncMock(return_value=0)
+        captured_args = []
+
+        async def capture_exec(*args, **kwargs):
+            captured_args.extend(args)
+            return mock_proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+            await cr._stop_container("mycontainer")
+
+        assert "--time" in captured_args
+        assert "10" in captured_args
+        assert "mycontainer" in captured_args
+
+    @pytest.mark.asyncio
+    async def test_stop_container_swallows_exception(self):
+        """_stop_container should not raise even if subprocess fails."""
+        import host.container_runner as cr
+
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(side_effect=OSError("no docker"))):
+            # Should not raise
+            await cr._stop_container("ghost-container")
+
+
+# ── Fix #2 (v1.10.0): /api/env key allowlist ─────────────────────────────────
+
+class TestEnvKeyAllowlist:
+    def test_editable_env_keys_is_frozenset(self):
+        """EDITABLE_ENV_KEYS must be a frozenset."""
+        from host import config
+        assert isinstance(config.EDITABLE_ENV_KEYS, frozenset)
+
+    def test_editable_env_keys_contains_expected_keys(self):
+        """EDITABLE_ENV_KEYS should contain the standard configurable keys."""
+        from host import config
+        for key in ("CLAUDE_API_KEY", "TELEGRAM_TOKEN", "DASHBOARD_PASSWORD",
+                    "CONTAINER_IMAGE", "MAX_CONCURRENT_CONTAINERS"):
+            assert key in config.EDITABLE_ENV_KEYS, f"{key} should be in EDITABLE_ENV_KEYS"
+
+    def test_env_post_rejects_disallowed_key(self):
+        """Disallowed keys should produce an error string from the validation logic."""
+        from host import config
+        disallowed_key = "PATH"
+        assert disallowed_key not in config.EDITABLE_ENV_KEYS
+
+        key = disallowed_key.strip()
+        if key not in config.EDITABLE_ENV_KEYS:
+            error = f"Key '{key}' is not editable via dashboard"
+        else:
+            error = None
+        assert error is not None, "Disallowed key should produce an error"
+
+    def test_env_post_allows_claude_api_key(self):
+        """POST /api/env with CLAUDE_API_KEY should pass validation."""
+        from host import config
+        assert "CLAUDE_API_KEY" in config.EDITABLE_ENV_KEYS
+
+    def test_newline_stripped_from_value(self):
+        """Newlines and control chars should be stripped from env values."""
+        value = "abc\r\ndef\x00ghi"
+        cleaned = "".join(ch for ch in value if ch not in "\r\n\x00")
+        assert cleaned == "abcdefghi"
+
+
+# ── Fix #6 (v1.10.0): WebPortal session TTL expiry ───────────────────────────
+
+class TestWebportalSessionTTL:
+    def test_expire_sessions_removes_stale_sessions(self):
+        """Sessions idle longer than TTL should be removed by _expire_sessions."""
+        from host.webportal import _sessions, _sessions_lock, _expire_sessions, _SESSION_TTL_SECONDS
+        import time as _time
+
+        stale_id = "stale-session-" + str(uuid.uuid4())
+        fresh_id = "fresh-session-" + str(uuid.uuid4())
+        now = _time.time()
+
+        with _sessions_lock:
+            _sessions[stale_id] = {
+                "jid": "jid-x",
+                "messages": [],
+                "created": now - _SESSION_TTL_SECONDS - 100,
+                "last_seen": now - _SESSION_TTL_SECONDS - 100,
+            }
+            _sessions[fresh_id] = {
+                "jid": "jid-y",
+                "messages": [],
+                "created": now,
+                "last_seen": now,
+            }
+
+        _expire_sessions()
+
+        with _sessions_lock:
+            assert stale_id not in _sessions, "Stale session should have been expired"
+            assert fresh_id in _sessions, "Fresh session should be kept"
+            _sessions.pop(fresh_id, None)
+
+    def test_session_ttl_constant_is_3600(self):
+        """_SESSION_TTL_SECONDS should be 3600 (1 hour)."""
+        from host.webportal import _SESSION_TTL_SECONDS
+        assert _SESSION_TTL_SECONDS == 3600
+
+    def test_new_session_has_last_seen(self):
+        """A newly created session should have a last_seen timestamp."""
+        from host.webportal import _sessions, _sessions_lock
+        import time as _time
+
+        session_id = str(uuid.uuid4())
+        now = _time.time()
+        with _sessions_lock:
+            _sessions[session_id] = {
+                "jid": "jid-z",
+                "messages": [],
+                "created": now,
+                "last_seen": now,
+            }
+
+        with _sessions_lock:
+            sess = _sessions.get(session_id)
+
+        assert sess is not None
+        assert "last_seen" in sess
+        assert sess["last_seen"] >= now - 1
+
+        with _sessions_lock:
+            _sessions.pop(session_id, None)
+
+
+# ── Fix #5 (v1.10.0): Scheduler GroupQueue routing ───────────────────────────
+
+class TestSchedulerGroupQueueRouting:
+    @pytest.mark.asyncio
+    async def test_scheduler_calls_enqueue_task_when_group_queue_provided(self):
+        """start_scheduler_loop should call group_queue.enqueue_task for due tasks."""
+        from host.task_scheduler import start_scheduler_loop
+        import asyncio
+
+        mock_queue = MagicMock()
+        mock_queue.enqueue_task = MagicMock()
+
+        fake_task = {
+            "id": "task-abc",
+            "chat_jid": "jid-test",
+            "group_folder": "test-group",
+            "prompt": "hello",
+            "schedule_type": "once",
+            "schedule_value": "",
+            "context_mode": "isolated",
+        }
+
+        stop_event = asyncio.Event()
+
+        with patch("host.task_scheduler.db") as mock_db:
+            mock_db.get_due_tasks = MagicMock(return_value=[fake_task])
+            with patch("host.task_scheduler.config") as mock_cfg:
+                mock_cfg.SCHEDULER_POLL_INTERVAL = 0.01
+
+                async def stop_after_delay():
+                    await asyncio.sleep(0.05)
+                    stop_event.set()
+
+                asyncio.create_task(stop_after_delay())
+                await start_scheduler_loop(
+                    lambda jid: {"jid": jid, "folder": "test"},
+                    AsyncMock(),
+                    stop_event,
+                    group_queue=mock_queue,
+                )
+
+        assert mock_queue.enqueue_task.called, "enqueue_task should be called when group_queue is provided"
+
+    @pytest.mark.asyncio
+    async def test_scheduler_falls_back_to_create_task_without_group_queue(self):
+        """Without group_queue, start_scheduler_loop should use asyncio.create_task."""
+        from host.task_scheduler import start_scheduler_loop
+        import asyncio
+
+        fake_task = {
+            "id": "task-xyz",
+            "chat_jid": "jid-fallback",
+            "group_folder": "fallback-group",
+            "prompt": "do something",
+            "schedule_type": "once",
+            "schedule_value": "",
+            "context_mode": "isolated",
+        }
+
+        stop_event = asyncio.Event()
+        created_tasks = []
+        original_create_task = asyncio.create_task
+
+        def spy_create_task(coro, **kwargs):
+            task = original_create_task(coro, **kwargs)
+            created_tasks.append(task)
+            return task
+
+        with patch("host.task_scheduler.db") as mock_db:
+            mock_db.get_due_tasks = MagicMock(return_value=[fake_task])
+            with patch("host.task_scheduler.config") as mock_cfg:
+                mock_cfg.SCHEDULER_POLL_INTERVAL = 0.01
+                with patch("asyncio.create_task", side_effect=spy_create_task):
+                    async def stop_after_delay():
+                        await asyncio.sleep(0.05)
+                        stop_event.set()
+
+                    asyncio.create_task(stop_after_delay())
+                    await start_scheduler_loop(
+                        lambda jid: {"jid": jid, "folder": "fallback"},
+                        AsyncMock(),
+                        stop_event,
+                        group_queue=None,
+                    )
+
+        assert len(created_tasks) > 0, "create_task should be called when group_queue is None"

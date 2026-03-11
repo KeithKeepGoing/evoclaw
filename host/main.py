@@ -429,7 +429,7 @@ async def main() -> None:
         await asyncio.gather(
             _message_loop(),
             start_ipc_watcher(_get_groups, _ipc_route_fn, _stop_event),
-            start_scheduler_loop(_get_group_by_jid, run_container_agent, _stop_event),
+            start_scheduler_loop(_get_group_by_jid, run_container_agent, _stop_event, _group_queue),
             evolution_loop(_stop_event),
             health_monitor_loop(_stop_event),
             _orphan_cleanup_loop(_stop_event),

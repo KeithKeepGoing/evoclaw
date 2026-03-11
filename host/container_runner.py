@@ -1,10 +1,12 @@
 """Spawns and manages agent execution in Docker containers"""
 import asyncio
+import atexit
 import json
 import logging
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -20,12 +22,28 @@ log = logging.getLogger(__name__)
 
 # ── Active container tracking (for dashboard) ─────────────────────────────────
 _active_containers: dict[str, dict] = {}  # container_name → info dict
-_active_lock = _threading.Lock()
+_active_lock = asyncio.Lock()  # asyncio.Lock for use in async coroutines
 
 # ── Docker circuit breaker ─────────────────────────────────────────────────────
 _docker_failures = 0
 _docker_failure_lock = _threading.Lock()
 _DOCKER_CIRCUIT_THRESHOLD = 3  # open circuit after this many consecutive failures
+
+# ── Portable empty file for .env shadow mount ──────────────────────────────────
+_EMPTY_ENV_FILE: str | None = None
+
+
+def _get_empty_env_file() -> str:
+    """Return path to a persistent empty temp file used for .env shadow mount.
+    Using a real file instead of /dev/null ensures macOS Docker Desktop compatibility.
+    """
+    global _EMPTY_ENV_FILE
+    if _EMPTY_ENV_FILE is None:
+        fd, path = tempfile.mkstemp(prefix="evoclaw_empty_env_", suffix=".env")
+        os.close(fd)
+        atexit.register(os.unlink, path)
+        _EMPTY_ENV_FILE = path
+    return _EMPTY_ENV_FILE
 
 
 def _record_docker_success() -> None:
@@ -46,9 +64,11 @@ def _docker_circuit_open() -> bool:
 
 
 def get_active_containers() -> list[dict]:
-    """Return a snapshot of currently running evoclaw containers."""
-    with _active_lock:
-        return list(_active_containers.values())
+    """Thread-safe snapshot for dashboard thread.
+    Since asyncio is single-threaded, a shallow copy without lock is safe
+    for reading from another thread (GIL protects dict iteration on CPython).
+    """
+    return list(_active_containers.values())
 
 
 def _docker_path(p) -> str:
@@ -95,7 +115,8 @@ def _build_volume_mounts(group: dict) -> list[str]:
         ]
         # Security: shadow .env to prevent container access to host secrets.
         # The project dir is mounted :ro above, so .env is readable inside the container
-        # unless we shadow it. Binding /dev/null over the target path hides the file.
+        # unless we shadow it. Use a portable empty temp file instead of /dev/null
+        # because /dev/null cannot be bind-mounted on macOS Docker Desktop.
         env_file = base_dir / ".env"
         if env_file.exists():
             log.warning(
@@ -105,7 +126,7 @@ def _build_volume_mounts(group: dict) -> list[str]:
                 env_file
             )
             mounts.append(
-                f"--mount type=bind,source=/dev/null,target=/workspace/project/.env,readonly"
+                f"-v {_get_empty_env_file()}:/workspace/project/.env:ro"
             )
     else:
         # 一般群組只能存取自己的資料夾與全域共享設定，無法觸碰原始碼
@@ -136,7 +157,7 @@ def _safe_name(folder: str) -> str:
 
 async def update_container_activity(container_name: str, activity: str) -> None:
     """Update the current_activity field for a running container (called from stderr stream)."""
-    with _active_lock:
+    async with _active_lock:
         if container_name in _active_containers:
             _active_containers[container_name]["current_activity"] = activity
 
@@ -223,7 +244,7 @@ async def run_container_agent(
     input_json = json.dumps(input_data, ensure_ascii=True)
     # 記錄 container 啟動時間，用於計算回應時間（適應度追蹤）
     t0 = time.time()
-    with _active_lock:
+    async with _active_lock:
         _active_containers[container_name] = {
             "name": container_name,
             "folder": folder,
@@ -304,7 +325,7 @@ async def run_container_agent(
                     if line:
                         stderr_lines.append(line)
                         log.debug("[container:%s] %s", container_name, line)
-                        with _active_lock:
+                        async with _active_lock:
                             if container_name in _active_containers:
                                 _active_containers[container_name]["current_activity"] = line
 
@@ -381,13 +402,18 @@ async def run_container_agent(
         _record_docker_failure()
         return {"status": "error", "result": None, "error": str(e)}
     finally:
-        with _active_lock:
+        async with _active_lock:
             _active_containers.pop(container_name, None)
 
 async def _stop_container(name: str) -> None:
     """發送 docker stop 指令強制停止指定 container（超時時呼叫）。"""
     try:
-        await asyncio.create_subprocess_exec("docker", "stop", name)
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "stop", "--time", "10", name,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
     except Exception:
         pass
 

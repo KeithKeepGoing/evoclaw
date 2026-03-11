@@ -5,6 +5,25 @@
 格式基於 [Keep a Changelog](https://keepachangelog.com/)，
 版本號遵循 [語意化版本](https://semver.org/)。
 
+## [1.10.0] - 2026-03-11
+
+### Fixed
+- #1 container_runner: _stop_container now awaits proc.wait() — eliminates zombie docker stop subprocesses
+- #2 dashboard: /api/env POST validates key against EDITABLE_ENV_KEYS allowlist, strips newlines from value
+- #3 container_runner: _active_lock changed to asyncio.Lock, all async callers use async with
+- #4 evolution: genome.formality and genome.technical_depth now evolve each cycle (full 3-dimension genome)
+- #5 task_scheduler: scheduled tasks now route through GroupQueue for per-group serialization
+- #6 webportal: sessions expire after 1 hour (SESSION_TTL=3600s), preventing unbounded memory growth
+- #7 container_runner: .env shadow mount uses portable temp file instead of /dev/null (macOS compatible)
+- #8 ipc_watcher: DevEngine JID fallback now tries folder lookup before error, clearer error messages
+
+### Added
+- config.py: EDITABLE_ENV_KEYS frozenset defining dashboard-editable environment variables
+- tests/test_evolution.py: 8 tests for full genome evolution (response_style, formality, technical_depth)
+- Additional test coverage for _stop_container, /api/env allowlist, session TTL, scheduler routing
+
+---
+
 ## [1.9.0] - 2026-03-11
 
 ### Security

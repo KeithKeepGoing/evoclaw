@@ -1,5 +1,43 @@
 # Release Notes
 
+## v1.10.0 — Full Genome Evolution + Reliability + Security Hardening (2026-03-11)
+
+This release closes 8 remaining architecture issues identified in deep review: zombie subprocesses, an environment variable injection vector, threading/async lock misuse, incomplete genome evolution, scheduler serialization bypass, unbounded session memory, a macOS Docker incompatibility, and a confusing DevEngine error path.
+
+### Fixed: _stop_container Zombie Subprocesses (#1)
+
+`_stop_container` previously called `asyncio.create_subprocess_exec` without awaiting `proc.wait()`. The Docker stop command ran fire-and-forget, creating zombie subprocesses and making cleanup unreliable. The fix awaits `proc.wait()` and adds `--time 10` for a graceful 10-second shutdown window, with stdout/stderr redirected to DEVNULL to avoid pipe buffering issues.
+
+### Fixed: /api/env Injection Vector (#2)
+
+The dashboard `/api/env` POST endpoint accepted arbitrary environment variable keys, allowing any key (including `PATH`, `LD_PRELOAD`, etc.) to be written to `.env`. A new `EDITABLE_ENV_KEYS` frozenset in `config.py` restricts editable keys to those EvoClaw actually uses. Unknown keys return a `400`-style error response. Newline characters (`\r`, `\n`, `\x00`) are stripped from values to prevent `.env` format injection.
+
+### Fixed: threading.Lock in Async Coroutines (#3)
+
+`_active_lock` was a `threading.Lock()` but was acquired inside `async def` coroutines (`_stream_stderr`, `run_container_agent`, `update_container_activity`). While not technically unsafe in CPython due to the GIL, it blocks the event loop during lock acquisition. The lock is now `asyncio.Lock()` and all coroutine callers use `async with`. The dashboard thread's `get_active_containers()` call now uses a GIL-safe shallow copy without needing the asyncio lock.
+
+### Fixed: Incomplete Genome Evolution (#4)
+
+`evolve_genome_from_fitness` only evolved `response_style`. The `formality` and `technical_depth` dimensions were tracked in the database but never modified by the evolution engine. Both dimensions now evolve each cycle: formality increases with high fitness + fast responses and nudges toward neutral (0.5) under low fitness; technical_depth increases with high-fitness fast responses and decreases under very slow or low-fitness conditions. All values are clamped to [0.0, 1.0] and rounded to 3 decimal places.
+
+### Fixed: Scheduler Bypasses GroupQueue (#5)
+
+`start_scheduler_loop` called `asyncio.create_task(run_task(...))` directly, bypassing `GroupQueue`. This meant scheduled tasks could run concurrently with message-response containers for the same group, causing race conditions on shared state. The scheduler now accepts an optional `group_queue` parameter and routes tasks through `GroupQueue.enqueue_task()` for proper per-group serialization. The fallback (no `group_queue`) preserves backward compatibility.
+
+### Fixed: Unbounded Session Memory in WebPortal (#6)
+
+The WebPortal `_sessions` dict grew without bound. A 1-hour TTL (`_SESSION_TTL_SECONDS = 3600`) is now enforced. Sessions track a `last_seen` timestamp updated on each poll request. A lazy expiry function runs every 60 polls to remove expired sessions without adding overhead to every request.
+
+### Fixed: .env Shadow Mount macOS Incompatibility (#7)
+
+The v1.9.0 `.env` security shadow mount used `source=/dev/null` in a bind mount. On macOS Docker Desktop, `/dev/null` cannot be used as a bind mount source. The fix creates a persistent empty temporary file at startup (`tempfile.mkstemp`) and registers an `atexit` handler to clean it up. The regular `-v` bind mount syntax is used for compatibility.
+
+### Fixed: DevEngine JID Fallback Error Message (#8)
+
+When a `dev_task` IPC message arrived from a group folder not yet in the registered groups, the fallback `group_folder` string was passed as a JID. If `_run_dev_task` then couldn't find a group by that JID, it logged a confusing error without trying a folder-based lookup. The fix adds a two-step lookup (JID first, then folder fallback) and emits a clear error message identifying both the lookup value and the reason for failure.
+
+---
+
 ## v1.9.0 — Security Hardening + Reliability Improvements (2026-03-11)
 
 This release focuses on two critical security fixes and several high/medium reliability improvements across the host daemon.

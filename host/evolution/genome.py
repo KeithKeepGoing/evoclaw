@@ -68,13 +68,12 @@ def upsert_genome(jid: str, **kwargs) -> None:
 
 def evolve_genome_from_fitness(jid: str, fitness: float, avg_response_ms: float) -> None:
     """
-    根據適應度和回應時間，自動調整群組基因組。
+    根據適應度和回應時間，自動調整群組基因組（全三維演化）。
 
     演化規則（模擬自然選擇壓力）：
-      - 回應很慢（>15秒）且適應度低 → 調整為更簡短的回答風格
-      - 回應很快（<5秒）且適應度高 → 可嘗試更詳細的回答
-
-    這是「演化壓力」的體現：環境（用戶耐心）選擇了適合的回答長度。
+      - response_style：回應慢且效果差 → 更簡短；回應快且效果好 → 更詳細
+      - formality：高適應度+快速 → 更正式；低適應度 → 朝中性（0.5）收斂
+      - technical_depth：高適應度+快速 → 增加深度；極慢或低適應度 → 減少深度
 
     參數：
       jid            — 群組 JID
@@ -83,49 +82,78 @@ def evolve_genome_from_fitness(jid: str, fitness: float, avg_response_ms: float)
     """
     from host import db
     genome = get_genome(jid)
-    current_style = genome.get("response_style", "balanced")
     generation = genome.get("generation", 0)
+    response_style = genome.get("response_style", "balanced")
+    formality = float(genome.get("formality", 0.5))
+    technical_depth = float(genome.get("technical_depth", 0.5))
 
-    new_style = current_style
-    if avg_response_ms > 15_000 and fitness < 0.4:
-        # 回應慢且效果差 → 朝簡短方向演化（施加「速度選擇壓力」）
-        if current_style == "detailed":
-            new_style = "balanced"
-        elif current_style == "balanced":
-            new_style = "concise"
-    elif avg_response_ms < 5_000 and fitness > 0.7:
-        # 回應快且效果好 → 嘗試更詳細（有餘裕可以提供更多資訊）
-        if current_style == "concise":
-            new_style = "balanced"
-        elif current_style == "balanced":
-            new_style = "detailed"
+    # Evolve response_style
+    style_order = ["concise", "balanced", "detailed"]
+    idx = style_order.index(response_style) if response_style in style_order else 1
+    if avg_response_ms > 15_000 and fitness < 0.4 and idx > 0:
+        new_style = style_order[idx - 1]
+    elif avg_response_ms < 5_000 and fitness > 0.7 and idx < 2:
+        new_style = style_order[idx + 1]
+    else:
+        new_style = response_style
 
-    changed = new_style != current_style
-    if changed:
-        log.info(f"Genome evolution for {jid}: {current_style} → {new_style} "
+    # Evolve formality: nudge toward 0.5 baseline, adjust based on fitness
+    # High fitness + fast responses → slightly more formal (confidence)
+    # Low fitness → nudge toward neutral (0.5)
+    FORMALITY_STEP = 0.05
+    if fitness > 0.7 and avg_response_ms < 8000:
+        formality = min(1.0, formality + FORMALITY_STEP)
+    elif fitness < 0.4:
+        # Nudge toward neutral
+        formality = formality + FORMALITY_STEP * (0.5 - formality)
+    formality = round(max(0.0, min(1.0, formality)), 3)
+
+    # Evolve technical_depth: increase when responses are fast and successful
+    # Decrease when responses are slow (user may be confused by complexity)
+    DEPTH_STEP = 0.05
+    if fitness > 0.7 and avg_response_ms < 6000:
+        technical_depth = min(1.0, technical_depth + DEPTH_STEP)
+    elif avg_response_ms > 20_000 or fitness < 0.3:
+        technical_depth = max(0.0, technical_depth - DEPTH_STEP)
+    technical_depth = round(max(0.0, min(1.0, technical_depth)), 3)
+
+    style_changed = new_style != response_style
+    if style_changed:
+        log.info(f"Genome evolution for {jid}: style {response_style} → {new_style} "
                  f"(fitness={fitness:.2f}, avg_ms={avg_response_ms:.0f})")
+    log.debug(
+        f"Genome evolution for {jid}: formality={formality:.3f} "
+        f"technical_depth={technical_depth:.3f} "
+        f"(fitness={fitness:.2f}, avg_ms={avg_response_ms:.0f})"
+    )
 
     upsert_genome(
         jid,
         response_style=new_style,
+        formality=formality,
+        technical_depth=technical_depth,
         generation=generation + 1,
     )
 
     # 記錄演化歷程
     genome_before = {
-        "response_style": current_style,
+        "response_style": response_style,
         "formality": genome.get("formality", 0.5),
         "technical_depth": genome.get("technical_depth", 0.5),
         "generation": generation,
     }
-    genome_after = dict(genome_before)
-    genome_after["response_style"] = new_style
-    genome_after["generation"] = generation + 1
+    genome_after = {
+        "response_style": new_style,
+        "formality": formality,
+        "technical_depth": technical_depth,
+        "generation": generation + 1,
+    }
 
-    event_type = "genome_evolved" if changed else "genome_unchanged"
+    event_type = "genome_evolved" if style_changed else "genome_unchanged"
     notes = (
-        f"style: {current_style} → {new_style}" if changed
-        else f"style unchanged ({current_style}), fitness={fitness:.3f}"
+        f"style: {response_style} → {new_style}, formality={formality:.3f}, technical_depth={technical_depth:.3f}"
+        if style_changed
+        else f"style unchanged ({response_style}), formality={formality:.3f}, technical_depth={technical_depth:.3f}, fitness={fitness:.3f}"
     )
     try:
         db.log_evolution_event(

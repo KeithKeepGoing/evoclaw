@@ -13,7 +13,7 @@
 以 Python 打造的 AI 助理框架，支援 Gemini、OpenAI 相容 API 及 Claude。
 內建**進化引擎**，讓助手隨著使用自動學習與改進。
 
-**v1.9.0** — 安全強化 + 可靠性改進：Dashboard 預設綁定 127.0.0.1、.env 容器遮蔽、XSS 修復、skills_engine 正確相對導入、dev_task 並發序列化、逾時不丟訊息、SQLite WAL 模式等。
+**v1.10.0** — 完整基因組演化 + 可靠性 + 安全強化：_stop_container 等待 proc.wait()、/api/env 鍵白名單、asyncio.Lock 替換 threading.Lock、formality/technical_depth 三維基因組演化、排程器透過 GroupQueue 序列化、WebPortal 1 小時 session 過期、.env 遮蔽 macOS 相容性修復、DevEngine JID 回退清晰錯誤訊息。
 
 ---
 

@@ -72,6 +72,29 @@ HEALTH_PORT = _env_int("HEALTH_PORT", 8767)
 # Channels to load (comma-separated, default: telegram)
 ENABLED_CHANNELS = [c.strip() for c in os.environ.get("ENABLED_CHANNELS", "telegram").split(",")]
 
+# Keys that can be modified via the dashboard /api/env endpoint
+EDITABLE_ENV_KEYS: frozenset = frozenset({
+    "CLAUDE_API_KEY",
+    "TELEGRAM_TOKEN",
+    "WHATSAPP_TOKEN",
+    "DISCORD_TOKEN",
+    "SLACK_TOKEN",
+    "GMAIL_CLIENT_ID",
+    "GMAIL_CLIENT_SECRET",
+    "GMAIL_REFRESH_TOKEN",
+    "DASHBOARD_PASSWORD",
+    "DASHBOARD_HOST",
+    "DASHBOARD_PORT",
+    "WEBPORTAL_PORT",
+    "POLL_INTERVAL",
+    "IPC_POLL_INTERVAL",
+    "CONTAINER_IMAGE",
+    "MAX_CONCURRENT_CONTAINERS",
+    "ASSISTANT_NAME",
+    "EVOLUTION_ENABLED",
+})
+
+
 def get_secrets() -> dict:
     return read_env_file([
         "GOOGLE_API_KEY",
