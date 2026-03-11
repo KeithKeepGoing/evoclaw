@@ -5,6 +5,15 @@
 格式基於 [Keep a Changelog](https://keepachangelog.com/)，
 版本號遵循 [語意化版本](https://semver.org/)。
 
+## [1.10.3] - 2026-03-11
+
+### Fixed (Hotfix)
+- Windows encoding: all file read/write operations now explicitly use encoding="utf-8"
+  to prevent cp950/cp936 codec errors on Windows systems
+- Affects: ipc_watcher.py, container_runner.py, dev_engine.py, and all host modules
+
+---
+
 ## [1.10.2] - 2026-03-11
 
 ### Fixed (Hotfix)

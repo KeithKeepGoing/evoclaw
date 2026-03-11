@@ -84,7 +84,7 @@ async def process_ipc_dir(group_folder: str, is_main: bool, route_fn: Callable) 
         # sorted() 確保按檔名（時間戳記前綴）的 FIFO 順序處理
         for f in sorted(d.glob("*.json")):
             try:
-                content = f.read_text()
+                content = f.read_text(encoding="utf-8")
                 try:
                     payload = json.loads(content)
                 except json.JSONDecodeError as e:
@@ -222,7 +222,7 @@ async def _handle_ipc(payload: dict, group_folder: str, is_main: bool, route_fn:
         # 用檔案旗標（而非直接呼叫函式）是因為 IPC watcher 與 message loop
         # 在不同的 asyncio task 中，透過旗標可以避免跨 task 的直接耦合
         flag = config.DATA_DIR / "refresh_groups.flag"
-        flag.write_text("1")
+        flag.write_text("1", encoding="utf-8")
         log.info("Groups refresh requested via IPC")
 
     elif msg_type == "apply_skill":

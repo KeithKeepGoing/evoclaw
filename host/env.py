@@ -11,7 +11,7 @@ def read_env_file(keys: list[str]) -> dict[str, str]:
         return {}
     result = {}
     try:
-        for line in env_path.read_text().splitlines():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue

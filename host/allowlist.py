@@ -12,7 +12,7 @@ def load_sender_allowlist() -> set[str]:
     if not path.exists():
         return set()
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         senders = set(data.get("senders", []))
         log.info(f"Sender allowlist loaded: {len(senders)} entries")
         return senders
@@ -32,7 +32,7 @@ def load_mount_allowlist() -> list[str]:
     if not path.exists():
         return []
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data.get("mounts", [])
     except Exception as e:
         log.warning(f"Failed to load mount allowlist: {e}")

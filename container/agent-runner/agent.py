@@ -280,7 +280,7 @@ def tool_send_file(chat_jid: str, file_path: str, caption: str = "") -> str:
     }
     msg_file = Path(IPC_MESSAGES_DIR) / f"file_{int(time.time()*1000)}_{os.getpid()}.json"
     Path(IPC_MESSAGES_DIR).mkdir(parents=True, exist_ok=True)
-    msg_file.write_text(json.dumps(payload, ensure_ascii=False))
+    msg_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return f"File queued for delivery: {os.path.basename(file_path)}"
 
 
