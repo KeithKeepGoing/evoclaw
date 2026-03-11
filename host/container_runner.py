@@ -164,6 +164,12 @@ def _build_volume_mounts(group: dict) -> list[str]:
         (ipc_dir / sub).mkdir(parents=True, exist_ok=True)
     mounts.append(f"{_docker_path(ipc_dir)}:/workspace/ipc:rw")
 
+    # Dynamic tools：Skills 安裝的 container_tools 熱插拔目錄
+    # 不需重建 image — 安裝 skill 後下次 container 啟動即自動 import
+    dynamic_tools_dir = data_dir / "dynamic_tools"
+    dynamic_tools_dir.mkdir(parents=True, exist_ok=True)
+    mounts.append(f"{_docker_path(dynamic_tools_dir)}:/app/dynamic_tools:ro")
+
     return mounts
 
 def _safe_name(folder: str) -> str:

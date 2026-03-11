@@ -61,6 +61,25 @@ def uninstall_skill(skill_name: str, project_root: Path | None = None) -> Uninst
                     )
                     break
 
+    # --- Remove container_tools for the uninstalled skill ---
+    # Read the manifest to find which Python tools need removing from data/dynamic_tools/
+    uninstall_skill_dir = find_skill_dir(skill_name, root)
+    if uninstall_skill_dir:
+        try:
+            manifest_to_remove = read_manifest(uninstall_skill_dir)
+            if manifest_to_remove.container_tools:
+                import os as _os
+                from pathlib import Path as _Path
+                data_dir = _Path(_os.environ.get("DATA_DIR", str(root / "data")))
+                dynamic_tools_dir = data_dir / "dynamic_tools"
+                for tool_rel in manifest_to_remove.container_tools:
+                    tool_file = dynamic_tools_dir / _Path(tool_rel).name
+                    if tool_file.exists():
+                        tool_file.unlink()
+                        print(f"Removed container tool: {tool_file.name}")
+        except Exception as e:
+            print(f"Warning: could not clean up container_tools for '{skill_name}': {e}")
+
     # Acquire lock and replay
     lock = acquire_lock()
     try:

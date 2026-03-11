@@ -414,6 +414,96 @@ def tool_web_fetch(url: str) -> str:
         return f"Error fetching {url}: {e}"
 
 
+# ── Dynamic tool registry ─────────────────────────────────────────────────────
+# Skills 安裝的 container_tools/*.py 在 container 啟動時從 /app/dynamic_tools/ 動態載入
+# 每個工具以 register_dynamic_tool() 自我註冊，不需重建 Docker image
+
+_dynamic_tools: dict[str, dict] = {}  # name → {"fn": callable, "schema": dict, "description": str}
+
+
+def _json_schema_to_gemini(props: dict, required: list):
+    """將 JSON Schema properties 轉換為 Gemini types.Schema（僅支援常用型別）。"""
+    if not _GOOGLE_AVAILABLE or types is None:
+        return None
+    gemini_props = {}
+    for pname, pdef in props.items():
+        ptype_str = pdef.get("type", "string").upper()
+        ptype = getattr(types.Type, ptype_str, types.Type.STRING)
+        gemini_props[pname] = types.Schema(
+            type=ptype,
+            description=pdef.get("description", ""),
+        )
+    return types.Schema(
+        type=types.Type.OBJECT,
+        properties=gemini_props,
+        required=required or [],
+    )
+
+
+def register_dynamic_tool(name: str, description: str, schema: dict, fn) -> None:
+    """
+    動態注冊工具到所有 provider 宣告列表（Gemini / Claude / OpenAI）。
+    由 /app/dynamic_tools/*.py 模組在 import 時呼叫。
+    schema 使用 JSON Schema 格式（OpenAI/Claude 相容）。
+    """
+    _dynamic_tools[name] = {"fn": fn, "description": description, "schema": schema}
+    props = schema.get("properties", {})
+    req = schema.get("required", [])
+
+    # Gemini FunctionDeclaration
+    if _GOOGLE_AVAILABLE and types is not None:
+        try:
+            gemini_params = _json_schema_to_gemini(props, req)
+            if gemini_params:
+                TOOL_DECLARATIONS.append(
+                    types.FunctionDeclaration(name=name, description=description, parameters=gemini_params)
+                )
+        except Exception:
+            pass
+
+    # Claude (Anthropic) tool declaration
+    CLAUDE_TOOL_DECLARATIONS.append({
+        "name": name,
+        "description": description,
+        "input_schema": schema,
+    })
+
+    # OpenAI-compatible tool declaration
+    OPENAI_TOOL_DECLARATIONS.append({
+        "type": "function",
+        "function": {"name": name, "description": description, "parameters": schema},
+    })
+
+    _log("🔌 DYNAMIC", f"registered tool: {name}")
+
+
+def _load_dynamic_tools() -> None:
+    """
+    自動 import /app/dynamic_tools/ 中的所有 .py 工具模組。
+    每個模組應在 module level 呼叫 register_dynamic_tool()。
+    這讓 DevEngine 生成的 Skill container_tools 不需重建 image 即可使用。
+    """
+    import importlib.util
+    dynamic_dir = Path("/app/dynamic_tools")
+    if not dynamic_dir.exists():
+        return
+    for py_file in sorted(dynamic_dir.glob("*.py")):
+        if py_file.name.startswith("_"):
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location(
+                f"dynamic_tools.{py_file.stem}", py_file
+            )
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                # 將 register_dynamic_tool 注入模組命名空間，讓工具可直接呼叫
+                mod.register_dynamic_tool = register_dynamic_tool  # type: ignore[attr-defined]
+                spec.loader.exec_module(mod)
+                _log("🔌 DYNAMIC TOOL", f"loaded {py_file.name}")
+        except Exception as exc:
+            _log("⚠️ DYNAMIC TOOL", f"failed to load {py_file.name}: {exc}")
+
+
 # ── Tool registry ─────────────────────────────────────────────────────────────
 
 # 向 Gemini function calling API 宣告可用的工具
@@ -752,6 +842,12 @@ def _execute_tool_inner(name: str, args: dict, chat_jid: str) -> str:
         return tool_run_agent(args["prompt"], args.get("context_mode", "isolated"))
     elif name == "mcp__evoclaw__send_file":
         return tool_send_file(args.get("chat_jid", chat_jid), args["file_path"], args.get("caption", ""))
+    # ── Dynamic tools (installed via Skills container_tools:) ─────────────────
+    if name in _dynamic_tools:
+        try:
+            return str(_dynamic_tools[name]["fn"](args))
+        except Exception as exc:
+            return f"Dynamic tool {name} error: {exc}"
     return f"Unknown tool: {name}"
 
 
@@ -977,6 +1073,11 @@ def main():
     # 這樣 Gemini SDK 等依賴 os.environ 的函式庫就能自動取得
     for k, v in secrets.items():
         os.environ[k] = v
+
+    # ── Dynamic tool hot-loading ──────────────────────────────────────────────
+    # 從 /app/dynamic_tools/ 掛載目錄載入 Skills 安裝的 container_tools
+    # 必須在 API key 設定後、LLM loop 前執行，讓工具有機會使用環境變數
+    _load_dynamic_tools()
 
     # ── Backend selection: NIM / OpenAI-compatible takes priority ────────────────
     nim_api_key = os.environ.get("NIM_API_KEY", "")

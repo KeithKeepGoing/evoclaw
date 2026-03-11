@@ -152,4 +152,48 @@ After release, verify:
 
 ---
 
-**Last Updated:** 2026-03-11 (v1.10.7)
+**Last Updated:** 2026-03-11 (v1.10.8)
+
+---
+
+## v1.10.8 Release Notes
+
+### 🔌 Dynamic Container Tool Hot-swap (Skills 2.0)
+
+**Problem**: DevEngine-generated skills could add new Python tools, but Docker containers are pre-built images — new tool files couldn't be loaded at runtime without `docker build`.
+
+**Solution**: A `data/dynamic_tools/` directory is now mounted read-only into every container at `/app/dynamic_tools`. The agent auto-imports all `*.py` files from this directory at startup, giving installed skills a way to add new callable tools without touching the image.
+
+#### How it works
+
+```
+Host: {DATA_DIR}/dynamic_tools/my_tool.py
+       │  (mounted via docker run -v)
+       ▼
+Container: /app/dynamic_tools/my_tool.py
+       │  (_load_dynamic_tools() → importlib.util.exec_module)
+       ▼
+Tool registry: register_dynamic_tool("my_tool", ...) → available to LLM
+```
+
+#### Skills manifest addition
+
+```yaml
+skill: my-data-skill
+version: "1.0.0"
+core_version: "1.10.8"
+adds:
+  - docs/superpowers/my-data-skill/SKILL.md
+container_tools:
+  - dynamic_tools/my_tool.py     # hot-loaded, no image rebuild
+modifies: []
+```
+
+#### Upgrade
+
+No `docker build` needed — the change is in the host runner and agent startup logic only. Restart EvoClaw and the feature is live.
+
+```bash
+git pull
+python run.py start
+```

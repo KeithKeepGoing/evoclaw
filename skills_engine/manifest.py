@@ -41,6 +41,7 @@ def read_manifest(skill_dir: str | Path) -> SkillManifest:
         min_skills_system_version=data.get("min_skills_system_version"),
         tested_with=data.get("tested_with") or [],
         post_apply=data.get("post_apply") or [],
+        container_tools=data.get("container_tools") or [],
     )
 
     # Validate paths don't escape project root

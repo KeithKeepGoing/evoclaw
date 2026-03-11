@@ -157,6 +157,26 @@ def apply_skill(skill_dir: str | Path) -> ApplyResult:
                     dest_path.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(str(src_path), str(dest_path))
 
+        # --- Copy container_tools → data/dynamic_tools/ (hot-loaded at container startup) ---
+        # container_tools are Python files that register new tools via register_dynamic_tool().
+        # They are mounted into containers at /app/dynamic_tools/ without image rebuild.
+        if manifest.container_tools:
+            from . import constants as _const
+            from pathlib import Path as _Path
+            import os as _os
+            # DATA_DIR falls back to evoclaw/data if env not set
+            data_dir = _Path(_os.environ.get("DATA_DIR", str(project_root / "data")))
+            dynamic_tools_dir = data_dir / "dynamic_tools"
+            dynamic_tools_dir.mkdir(parents=True, exist_ok=True)
+            for tool_rel in manifest.container_tools:
+                src = add_dir / tool_rel
+                if not src.exists():
+                    print(f"Warning: container_tool not found: {src}")
+                    continue
+                dst = dynamic_tools_dir / src.name  # flatten to single level
+                shutil.copy2(str(src), str(dst))
+                print(f"Installed container tool: {src.name} → {dst}")
+
         # --- Merge modified files ---
         merge_conflicts = []
         for rel_path in manifest.modifies:

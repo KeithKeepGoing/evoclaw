@@ -5,6 +5,65 @@ All notable changes to EvoClaw will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.8] - 2026-03-11
+
+### Added — Dynamic Container Tool Hot-swap (Skills 2.0)
+
+Solves the core Docker limitation for DevEngine-generated skills: new Python tools can now be installed into running containers without rebuilding the image.
+
+#### Architecture: `data/dynamic_tools/` volume mount
+- `host/container_runner.py`: `_build_volume_mounts()` now mounts `{DATA_DIR}/dynamic_tools/` → `/app/dynamic_tools:ro` in **every** container (both main and regular groups)
+- `container/agent-runner/agent.py`: new `_load_dynamic_tools()` function — scans `/app/dynamic_tools/*.py` at startup and dynamically imports each file via `importlib.util`; `register_dynamic_tool` is injected into each module's namespace
+- Drop a `.py` file into `data/dynamic_tools/`, next container run picks it up automatically — no `docker build` needed
+
+#### Dynamic Tool Registry (`agent.py`)
+- `_dynamic_tools: dict` — global in-process registry: `{name → {fn, schema, description}}`
+- `register_dynamic_tool(name, description, schema, fn)` — appends to **all three** provider declaration lists (Gemini `TOOL_DECLARATIONS`, `CLAUDE_TOOL_DECLARATIONS`, `OPENAI_TOOL_DECLARATIONS`) and registers the dispatch function
+- `_json_schema_to_gemini()` — converts JSON Schema properties dict to Gemini `types.Schema` at runtime (supports string, integer, boolean, object, array types)
+- `_execute_tool_inner()` — falls back to `_dynamic_tools` dispatch after all built-in tools
+
+#### Skills Engine: `container_tools:` manifest field
+- `skills_engine/types.py`: `SkillManifest` dataclass gains `container_tools: list[str]` field (default `[]`)
+- `skills_engine/manifest.py`: `read_manifest()` reads `container_tools:` from YAML
+- `skills_engine/apply.py`: after `adds:` processing, copies `container_tools` files from `skill/add/` → `{DATA_DIR}/dynamic_tools/` (flattened by filename)
+- `skills_engine/uninstall.py`: before replay, locates skill dir, reads manifest, removes its `container_tools` files from `dynamic_tools/`
+- `dynamic_tools/.gitkeep` — git-tracked directory placeholder
+
+### Example `manifest.yaml` with `container_tools:`
+```yaml
+skill: my-skill
+version: "1.0.0"
+adds:
+  - docs/superpowers/my-skill/SKILL.md
+container_tools:
+  - dynamic_tools/my_tool.py   # injected at /app/dynamic_tools/my_tool.py
+```
+
+### Example dynamic tool file
+```python
+# dynamic_tools/my_tool.py  (inside skill add/ directory)
+def _my_tool(args: dict) -> str:
+    return f"Result: {args['input']}"
+
+register_dynamic_tool(
+    name="my_tool",
+    description="Does something useful",
+    schema={"type": "object", "properties": {"input": {"type": "string"}}, "required": ["input"]},
+    fn=_my_tool,
+)
+```
+
+### Files Changed
+- `host/container_runner.py` (dynamic_tools mount in `_build_volume_mounts`)
+- `container/agent-runner/agent.py` (`_dynamic_tools` registry, `register_dynamic_tool`, `_load_dynamic_tools`, `_execute_tool_inner` fallback)
+- `skills_engine/types.py` (`container_tools` field on `SkillManifest`)
+- `skills_engine/manifest.py` (`container_tools` deserialization)
+- `skills_engine/apply.py` (`container_tools` copy to `dynamic_tools/`)
+- `skills_engine/uninstall.py` (`container_tools` cleanup before replay)
+- `dynamic_tools/.gitkeep` (new)
+
+---
+
 ## [1.10.7] - 2026-03-11
 
 ### Fixed

@@ -23,6 +23,9 @@ class SkillManifest:
     min_skills_system_version: Optional[str] = None
     tested_with: list[str] = field(default_factory=list)
     post_apply: list[str] = field(default_factory=list)
+    # container_tools: Python tool files hot-loaded by container at runtime via /app/dynamic_tools/
+    # Allows DevEngine-generated skills to add new tools without rebuilding the Docker image.
+    container_tools: list[str] = field(default_factory=list)
 
 
 @dataclass
