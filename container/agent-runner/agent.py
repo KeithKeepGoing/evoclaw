@@ -17,8 +17,14 @@ import urllib.request
 import urllib.error
 import html.parser
 from pathlib import Path
-from google import genai
-from google.genai import types
+try:
+    from google import genai
+    from google.genai import types
+    _GOOGLE_AVAILABLE = True
+except ImportError:
+    genai = None  # type: ignore
+    types = None  # type: ignore
+    _GOOGLE_AVAILABLE = False
 try:
     from openai import OpenAI as OpenAIClient
     _OPENAI_AVAILABLE = True
@@ -943,6 +949,10 @@ def main():
 
     if not use_openai_compat and not use_claude and not google_api_key:
         emit({"status": "error", "result": None, "error": "No API key found. Set GOOGLE_API_KEY, NIM_API_KEY, CLAUDE_API_KEY, or OPENAI_API_KEY in .env"})
+        return
+
+    if not use_openai_compat and not use_claude and not _GOOGLE_AVAILABLE:
+        emit({"status": "error", "result": None, "error": "google-genai package not installed in container. Run: docker build -t evoclaw-agent:latest container/"})
         return
 
     if use_openai_compat:
