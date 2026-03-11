@@ -13,7 +13,7 @@
 以 Python 打造的 AI 助理框架，支援 Gemini、OpenAI 相容 API 及 Claude。
 內建**進化引擎**，讓助手隨著使用自動學習與改進。
 
-**v1.10.8** — **動態容器工具熱插拔（Skills 2.0）**：DevEngine 生成的 Skill 現可新增 Python 工具至容器，不需重建 image。`data/dynamic_tools/` 掛載至 `/app/dynamic_tools:ro`，啟動時自動 import 並注冊至 Gemini / Claude / OpenAI 三大 provider；Skills manifest 新增 `container_tools:` 欄位。**v1.10.7** — 修復 Telegram 二進位檔案發送 `cp950` 編碼錯誤。
+**v1.10.9** — **對話記憶改善**：移除 800 字截斷、Session 管理修正（newSessionId 改用 UUID）、歷史時間窗可設定（預設 4 小時）、歷史訊息上限提升至 50 則。**v1.10.8** — **動態容器工具熱插拔（Skills 2.0）**：DevEngine 生成的 Skill 現可新增 Python 工具至容器，不需重建 image。`data/dynamic_tools/` 掛載至 `/app/dynamic_tools:ro`，啟動時自動 import 並注冊至 Gemini / Claude / OpenAI 三大 provider；Skills manifest 新增 `container_tools:` 欄位。**v1.10.7** — 修復 Telegram 二進位檔案發送 `cp950` 編碼錯誤。
 
 ---
 
@@ -44,7 +44,7 @@
 - 每個代理工作階段在**獨立的 Docker 容器**中執行（安全隔離）
 - **多模型支援**：Gemini 2.0 Flash（預設）、OpenAI 相容 API（NVIDIA NIM、Groq 等）、Claude
 - **排程任務** — 支援 cron、間隔、一次性執行
-- **原生多輪對話歷史** — 代理在每次對話中保留近期上下文記憶
+- **原生多輪對話歷史** — 代理在每次對話中保留近期上下文記憶（完整內容，無截斷；可設定 history_lookback_hours，預設 4 小時，最多 50 則）
 - **每群組記憶**：各群組資料夾內的 `MEMORY.md` 檔案
 - **代理集群（Agent Swarms）** — 組建專業代理團隊，協作處理複雜任務
 - 可用工具：Bash、Read、Write、Edit、Glob、Grep、WebFetch、send_message、schedule_task、list_tasks、pause_task、resume_task、cancel_task、`mcp__evoclaw__run_agent` — 在獨立容器中執行子任務，等待結果後回傳（subagent 功能）

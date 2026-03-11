@@ -236,15 +236,17 @@ async def run_container_agent(
 
     # 將 API 金鑰等敏感資料包進 input_data，透過 stdin 傳給 container
     secrets = _read_secrets()
-    # 取得最近 2 小時的對話歷史（最多 30 則），提供給 agent 作為上下文記憶
-    history_cutoff = int((time.time() - 7200) * 1000)  # 2 hours ago
-    history_msgs = db.get_messages_since(jid, history_cutoff, limit=30)
+    # 取得最近對話歷史（最多 50 則），提供給 agent 作為上下文記憶
+    # history_lookback_hours 可在 group config 中設定（預設 4 小時）
+    history_lookback = group.get("history_lookback_hours", 4) * 3600  # configurable, default 4h
+    history_cutoff = int((time.time() - history_lookback) * 1000)
+    history_msgs = db.get_messages_since(jid, history_cutoff, limit=50)
     conv_history = []
     for m in history_msgs:
         role = "assistant" if m.get("is_bot_message") else "user"
         text = str(m.get("content") or "").strip()
         if text:
-            conv_history.append({"role": role, "content": text[:800]})  # truncate long messages
+            conv_history.append({"role": role, "content": text})
 
     # 取得此群組的排程任務清單，傳給 container 讓 agent 可以列出和取消任務
     scheduled_tasks = db.get_all_tasks(group_folder=folder)

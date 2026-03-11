@@ -152,7 +152,33 @@ After release, verify:
 
 ---
 
-**Last Updated:** 2026-03-11 (v1.10.8)
+**Last Updated:** 2026-03-11 (v1.10.9)
+
+---
+
+## v1.10.9 Release Notes
+
+### Memory & Session Improvements
+
+**Problems Fixed**:
+1. Conversation history messages were truncated to 800 characters, losing context mid-sentence.
+2. The history lookback window was hardcoded at 2 hours, which was too short for many use cases.
+3. The session table in the database was never updated because the container returned a timestamp-based `newSessionId` (not a proper UUID), and the session was not reliably tracked.
+
+**Changes**:
+- Removed the 800-character truncation from conversation history messages — full content is now preserved.
+- `history_lookback_hours` is now configurable per group config (default: 4 hours, was hardcoded 2 hours).
+- History message limit increased from 30 to 50.
+- `newSessionId` in the container output now uses `uuid.uuid4()` for a proper unique session identifier, ensuring `db.set_session()` is called correctly on every run.
+
+#### Upgrade
+
+No `docker build` needed for the `newSessionId` fix — restart EvoClaw and the session table will begin updating correctly.
+
+```bash
+git pull
+python run.py start
+```
 
 ---
 

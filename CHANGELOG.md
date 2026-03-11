@@ -5,6 +5,17 @@ All notable changes to EvoClaw will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.9] - 2026-03-11
+
+### Fixed
+- 移除對話歷史訊息 800 字截斷限制，保留完整 context
+- 修正 Session 管理：container 現在回傳 newSessionId，DB 正確更新
+- 歷史時間窗從硬編碼 2 小時改為可設定（預設 4 小時）
+- 歷史訊息上限從 30 則增加至 50 則
+
+### Changed
+- history_lookback_hours 可在 group config 中設定（預設 4）
+
 ## [1.10.8] - 2026-03-11
 
 ### Added — Dynamic Container Tool Hot-swap (Skills 2.0)

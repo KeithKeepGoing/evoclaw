@@ -18,6 +18,7 @@ import urllib.error
 import html.parser
 import traceback
 import datetime as _dt
+import uuid
 from pathlib import Path
 
 import logging as _logging
@@ -1180,7 +1181,7 @@ def main():
         # 則清空 result 欄位，避免 host 的 container_runner 再次發送（雙重訊息 + 超長訊息 bug）
         # 若 agent 沒有呼叫工具（純文字回覆），則由 host 負責發送 result
         emit_result = "" if _messages_sent_via_tool else result
-        emit({"status": "success", "result": emit_result, "newSessionId": f"evoclaw-{int(time.time())}"})
+        emit({"status": "success", "result": emit_result, "newSessionId": str(uuid.uuid4())})
     except Exception as e:
         _log("❌ ERROR", f"{type(e).__name__}: {e}")
         traceback.print_exc(file=sys.stderr)
