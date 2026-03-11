@@ -34,7 +34,6 @@ class TelegramChannel:
             return
 
         import asyncio
-
         MAX_RETRIES = 3
         for attempt in range(1, MAX_RETRIES + 1):
             try:
@@ -69,7 +68,6 @@ class TelegramChannel:
                 await self._app.updater.start_polling()
                 log.info("Telegram channel connected")
                 return  # success
-
             except Exception as e:
                 err_str = str(e).lower()
                 if "conflict" in err_str:
@@ -78,6 +76,7 @@ class TelegramChannel:
                         "Stop the other instance and restart."
                     )
                     raise  # Conflict is unrecoverable, re-raise immediately
+
                 if attempt < MAX_RETRIES:
                     wait = 2 ** attempt  # 2s, 4s
                     log.warning(
@@ -106,39 +105,68 @@ class TelegramChannel:
 
     async def send_file(self, jid: str, file_path: str, caption: str = "") -> None:
         """Send a document/file to a Telegram chat."""
-        if not self._app:
-            return
         import pathlib
-        import mimetypes
+        import traceback
+
+        # --- DEBUG LOG START ---
+        debug_log_path = "/workspace/group/debug_send.log"
+        def write_debug(msg):
+            try:
+                with open(debug_log_path, "a", encoding="utf-8") as f:
+                    f.write(f"[DEBUG] {msg}\n")
+            except Exception as e:
+                pass
+        # --- DEBUG LOG END ---
+
+        write_debug(f"=== START send_file ===")
+        write_debug(f"Target JID: {jid}, File: {file_path}")
+
+        if not self._app:
+            write_debug("ERROR: self._app is None")
+            return
+
         p = pathlib.Path(file_path)
         if not p.exists():
+            write_debug(f"ERROR: File not found: {p}")
             await self.send_message(jid, f"⚠️ File not found: {p.name}")
             return
+
         chat_id = int(jid.replace("tg:", ""))
+        write_debug(f"Chat ID: {chat_id}, File Size: {p.stat().st_size} bytes")
+
         try:
-            # Read file as binary to avoid encoding issues (e.g., cp950 errors)
+            write_debug("Attempting to read file in binary mode...")
+            # CRITICAL FIX: Read file as binary to avoid encoding issues (e.g., cp950 errors)
             with open(p, "rb") as f:
                 file_data = f.read()
             
-            # Determine MIME type (fallback to application/octet-stream)
-            mime_type, _ = mimetypes.guess_type(str(p))
-            if mime_type is None:
-                mime_type = "application/octet-stream"
-            
-            # Send file using InputFile to ensure binary data is handled correctly
-            from telegram import InputFile
-            input_file = InputFile(file_data, filename=p.name)
-            
+            write_debug(f"File read successful. Data length: {len(file_data)}")
+            write_debug(f"Calling send_document API...")
+
+            # Send the file data directly
             await self._app.bot.send_document(
                 chat_id=chat_id,
-                document=input_file,
+                document=file_data,
+                filename=p.name,
                 caption=caption or f"📎 {p.name}",
-                disable_content_type_detection=True,  # Prevents Telegram from re-encoding
             )
+
+            write_debug("API call successful!")
+            log.info(f"Successfully sent file {p.name} to {jid}")
+
         except Exception as exc:
+            error_trace = traceback.format_exc()
+            write_debug(f"ERROR Exception: {exc}")
+            write_debug(f"Traceback: {error_trace}")
+            log.error(f"Failed to send file {p.name} to {jid}: {exc}", exc_info=True)
+
             # Fallback: notify user
-            log.error(f"Failed to send file '{p.name}': {exc}")
-            await self.send_message(jid, f"⚠️ Failed to send file '{p.name}': {exc}")
+            try:
+                await self.send_message(jid, f"⚠️ Failed to send file '{p.name}': {exc}")
+            except Exception as msg_exc:
+                log.error(f"Also failed to send error message: {msg_exc}")
+        finally:
+            write_debug("=== END send_file ===\n")
 
     async def send_typing(self, jid: str) -> None:
         if not self._app:
