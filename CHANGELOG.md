@@ -5,6 +5,17 @@
 格式基於 [Keep a Changelog](https://keepachangelog.com/)，
 版本號遵循 [語意化版本](https://semver.org/)。
 
+## [1.10.2] - 2026-03-11
+
+### Fixed (Hotfix)
+- CRITICAL: Container .env shadow mount now skipped on Windows (tempfile path incompatible with Docker Desktop on Windows)
+- CRITICAL: Added container stderr logging to "No valid output markers" warning for faster debugging
+- HIGH: Added per-group consecutive failure counter (max 5 fails → 60s cooldown) to prevent infinite retry loops
+- Verified asyncio.Lock usage in container_runner.py — no issues with non-async callers
+- Verified tool_send_file in agent.py — syntax and registration correct
+
+---
+
 ## [1.10.1] - 2026-03-11
 
 ### Added

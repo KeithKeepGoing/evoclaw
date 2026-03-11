@@ -10,6 +10,12 @@ import time
 import uuid
 from pathlib import Path
 
+# ── Per-group consecutive failure tracking (prevents infinite retry loops) ────
+_group_fail_counts: dict[str, int] = {}
+_group_fail_timestamps: dict[str, float] = {}
+_GROUP_MAX_FAILS = 5
+_GROUP_FAIL_COOLDOWN = 60.0  # seconds
+
 from . import config, db
 from .allowlist import load_sender_allowlist, is_sender_allowed
 from .dashboard import start_dashboard
@@ -136,6 +142,21 @@ async def _process_group_messages(group: dict, messages: list[dict],
     folder = group["folder"]
     jid = group["jid"]
 
+    # ── Consecutive failure guard: prevent infinite retry loops ───────────────
+    fail_count = _group_fail_counts.get(jid, 0)
+    last_fail = _group_fail_timestamps.get(jid, 0.0)
+    if fail_count >= _GROUP_MAX_FAILS:
+        if time.time() - last_fail < _GROUP_FAIL_COOLDOWN:
+            log.warning(
+                "Group %s has failed %d times consecutively, cooling down for %ds",
+                jid, fail_count, int(_GROUP_FAIL_COOLDOWN - (time.time() - last_fail))
+            )
+            return
+        else:
+            # Cooldown expired — reset counter and allow retry
+            _group_fail_counts[jid] = 0
+            _group_fail_timestamps.pop(jid, None)
+
     requires_trigger = bool(group.get("requires_trigger", True))
     is_main = bool(group.get("is_main"))
 
@@ -188,23 +209,40 @@ async def _process_group_messages(group: dict, messages: list[dict],
         except Exception:
             pass
 
+    # Wrap on_success to reset the failure counter on a successful run
+    _run_succeeded = False
+
+    async def _on_success_tracked():
+        nonlocal _run_succeeded
+        _run_succeeded = True
+        _group_fail_counts.pop(jid, None)
+        _group_fail_timestamps.pop(jid, None)
+        if on_success:
+            await on_success()
+
     try:
-        await asyncio.wait_for(
+        result = await asyncio.wait_for(
             run_container_agent(
                 group=group,
                 prompt=prompt,
                 conversation_history=conversation_history,
                 on_output=on_output,
                 session_id=session_id,
-                on_success=on_success,
+                on_success=_on_success_tracked,
             ),
             timeout=300.0,  # 5-minute timeout per container run
         )
+        # run_container_agent returns {"status": "error", ...} when no output markers found
+        if not _run_succeeded and isinstance(result, dict) and result.get("status") == "error":
+            _group_fail_counts[jid] = _group_fail_counts.get(jid, 0) + 1
+            _group_fail_timestamps[jid] = time.time()
     except asyncio.TimeoutError:
         log.error(
             "Container run timed out after 300s for group %s — message NOT dropped, "
             "will be retried on next poll cycle", jid
         )
+        _group_fail_counts[jid] = _group_fail_counts.get(jid, 0) + 1
+        _group_fail_timestamps[jid] = time.time()
         # DO NOT call on_success() — cursor stays behind so message is retried
         # Notify user that we're still working
         try:

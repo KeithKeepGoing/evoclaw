@@ -18,6 +18,10 @@ from . import config, db
 from .env import read_env_file
 from .evolution import record_run, get_adaptive_hints, get_genome_style_hints
 
+
+def _is_windows() -> bool:
+    return sys.platform == "win32"
+
 log = logging.getLogger(__name__)
 
 # ── Active container tracking (for dashboard) ─────────────────────────────────
@@ -33,17 +37,21 @@ _DOCKER_CIRCUIT_THRESHOLD = 3  # open circuit after this many consecutive failur
 _EMPTY_ENV_FILE: str | None = None
 
 
-def _get_empty_env_file() -> str:
-    """Return path to a persistent empty temp file used for .env shadow mount.
-    Using a real file instead of /dev/null ensures macOS Docker Desktop compatibility.
-    """
+def _get_empty_env_file() -> str | None:
+    """Get path to an empty file for shadowing .env in containers.
+    Returns None if temp file creation fails (e.g., on some Windows Docker configs)."""
     global _EMPTY_ENV_FILE
-    if _EMPTY_ENV_FILE is None:
+    if _EMPTY_ENV_FILE is not None:
+        return _EMPTY_ENV_FILE
+    try:
         fd, path = tempfile.mkstemp(prefix="evoclaw_empty_env_", suffix=".env")
         os.close(fd)
-        atexit.register(os.unlink, path)
+        atexit.register(lambda p=path: os.unlink(p) if os.path.exists(p) else None)
         _EMPTY_ENV_FILE = path
-    return _EMPTY_ENV_FILE
+        return path
+    except Exception as exc:
+        log.warning("Cannot create shadow .env temp file: %s", exc)
+        return None
 
 
 def _record_docker_success() -> None:
@@ -119,15 +127,22 @@ def _build_volume_mounts(group: dict) -> list[str]:
         # because /dev/null cannot be bind-mounted on macOS Docker Desktop.
         env_file = base_dir / ".env"
         if env_file.exists():
-            log.warning(
-                "SECURITY: .env file found in project root (%s). "
-                "This file is mounted read-only into agent containers. "
-                "Move secrets outside the project directory or use Docker secrets.",
-                env_file
-            )
-            mounts.append(
-                f"-v {_get_empty_env_file()}:/workspace/project/.env:ro"
-            )
+            empty_env = _get_empty_env_file()
+            if empty_env and not _is_windows():
+                log.warning(
+                    "SECURITY: .env file found in project root (%s). "
+                    "Shadowing with empty file to prevent container access to host secrets.",
+                    env_file
+                )
+                mounts.append(
+                    f"-v {_docker_path(empty_env)}:/workspace/project/.env:ro"
+                )
+            else:
+                log.warning(
+                    "SECURITY: .env file found in project root (%s). "
+                    "On Windows, shadow mount is skipped. Consider moving .env outside the project directory.",
+                    env_file
+                )
     else:
         # 一般群組只能存取自己的資料夾與全域共享設定，無法觸碰原始碼
         mounts += [
@@ -354,6 +369,13 @@ async def run_container_agent(
 
         if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
             # 找不到標記代表 container 可能在輸出結果前就崩潰了
+            stderr_lines = stderr.splitlines() if stderr else []
+            if stderr_lines:
+                log.warning(
+                    "Container %s stderr (last 5 lines):\n%s",
+                    container_name,
+                    "\n".join(stderr_lines[-5:])
+                )
             log.warning("No valid output markers in container stdout")
             return {"status": "error", "error": "no output markers", "messages": []}
 
