@@ -5,6 +5,19 @@
 格式基於 [Keep a Changelog](https://keepachangelog.com/)，
 版本號遵循 [語意化版本](https://semver.org/)。
 
+## [1.10.4] - 2026-03-11
+
+### Fixed
+- File delivery: comprehensive logging added to send_file IPC handler for debugging
+- File delivery: _resolve_container_path now uses pathlib.Path objects throughout for correct Windows path handling
+- File delivery: route_file import verified in ipc_watcher.py (was already present)
+- File delivery: tool_send_file auto-detects chat_jid from input JSON when not provided by LLM
+- File delivery: tool_send_file auto-creates parent directory to prevent silent write failures
+- File delivery: user notified via Telegram when file is not found (was silently failing with generic basename)
+- File delivery: CLAUDE.md updated with correct step-by-step instructions including mandatory directory creation
+
+---
+
 ## [1.10.3] - 2026-03-11
 
 ### Fixed (Hotfix)

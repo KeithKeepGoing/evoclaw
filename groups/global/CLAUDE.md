@@ -199,19 +199,27 @@ When you learn something important, save it to a file for future reference.
 
 ## File Delivery
 
-To send a file to the user, write the file to `/workspace/group/output/` first, then use the `mcp__evoclaw__send_file` tool:
+To send a file to the user, you MUST create the output directory first, then write the file, then call the send tool.
 
+*Step 1*: Create the output directory and write the file
 ```python
-# Step 1: Write the file
+import os
+os.makedirs("/workspace/group/output", exist_ok=True)
+# Write your file
 with open("/workspace/group/output/report.pptx", "wb") as f:
     f.write(pptx_bytes)
+```
 
-# Step 2: Send via IPC
+*Step 2*: Send via the tool (chat_jid is auto-detected from input — you may omit it)
+```python
 mcp__evoclaw__send_file(
-    chat_jid="<user's chat jid>",
     file_path="/workspace/group/output/report.pptx",
     caption="Here's your PowerPoint presentation!"
 )
 ```
 
-Files written to `/workspace/group/output/` are automatically accessible on the host and deliverable via Telegram.
+Important notes:
+• Always call `os.makedirs("/workspace/group/output", exist_ok=True)` before writing — the directory may not exist
+• `file_path` must be an absolute path starting with `/workspace/group/output/`
+• `chat_jid` is optional — the system auto-detects it from the input JSON
+• Files written to `/workspace/group/output/` are mapped to the host filesystem via Docker volume mount and deliverable via Telegram

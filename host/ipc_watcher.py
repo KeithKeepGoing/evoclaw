@@ -293,16 +293,25 @@ async def _handle_ipc(payload: dict, group_folder: str, is_main: bool, route_fn:
             _sf_match = next((g for g in _sf_groups if g.get("folder") == group_folder), None)
             _sf_jid = _sf_match["jid"] if _sf_match else ""
 
+        log.info("send_file IPC: container_path=%r group_folder=%r chat_jid=%r",
+                 container_path, group_folder, _sf_jid)
+
         # Resolve container path to host path
         # Container sees /workspace/group/ → host sees {GROUPS_DIR}/{folder}/
         host_path = _resolve_container_path(container_path, group_folder)
+        log.info("send_file IPC: resolved host_path=%r", host_path)
 
         if host_path and os.path.exists(host_path):
+            log.info("send_file IPC: file exists, routing to channel")
             _asyncio.ensure_future(route_file(_sf_jid, host_path, caption))
         else:
-            log.warning("send_file IPC: file not found at host path '%s' (container: '%s')",
+            log.warning("send_file IPC: file NOT found at host_path=%r (container: %r)",
                         host_path, container_path)
-            _asyncio.ensure_future(route_fn(_sf_jid, f"⚠️ File not found: {os.path.basename(container_path)}"))
+            fname = os.path.basename(container_path) if container_path else "unknown"
+            _asyncio.ensure_future(route_fn(
+                _sf_jid,
+                f"⚠️ 檔案無法傳送：找不到 {fname}\n路徑：{host_path}"
+            ))
 
 async def _run_dev_task(payload: dict, group_jid: str, route_fn) -> None:
     """
@@ -551,32 +560,41 @@ async def _run_subagent(
 def _resolve_container_path(container_path: str, group_folder: str) -> str | None:
     """Convert a container-side file path to the equivalent host path.
 
-    Container /workspace/group/  → host {GROUPS_DIR}/{folder}/
+    Container /workspace/group/   → host {GROUPS_DIR}/{folder}/
     Container /workspace/project/ → host {BASE_DIR}/
-    Container /workspace/ipc/    → host {DATA_DIR}/ipc/{folder}/
+    Container /workspace/ipc/     → host {DATA_DIR}/ipc/{folder}/
+    Container /workspace/global/  → host {GROUPS_DIR}/global/
+
+    Uses pathlib.Path throughout for correct Windows backslash handling.
     """
     import pathlib
-    p = container_path.replace("\\", "/")
 
-    groups_dir = str(config.GROUPS_DIR).rstrip("/")
-    base_dir = str(config.BASE_DIR).rstrip("/")
-    data_dir = str(config.DATA_DIR).rstrip("/")
+    # Normalize to forward slashes for prefix matching (container paths are always POSIX)
+    p = container_path.replace("\\", "/").strip()
 
+    groups_dir = pathlib.Path(config.GROUPS_DIR)
+    base_dir = pathlib.Path(config.BASE_DIR)
+    data_dir = pathlib.Path(config.DATA_DIR)
+
+    host: pathlib.Path | None = None
     if p.startswith("/workspace/group/"):
         rel = p[len("/workspace/group/"):]
-        return str(pathlib.Path(groups_dir) / group_folder / rel)
+        host = groups_dir / group_folder / rel
     elif p.startswith("/workspace/project/"):
         rel = p[len("/workspace/project/"):]
-        return str(pathlib.Path(base_dir) / rel)
+        host = base_dir / rel
     elif p.startswith("/workspace/ipc/"):
         rel = p[len("/workspace/ipc/"):]
-        return str(pathlib.Path(data_dir) / "ipc" / group_folder / rel)
+        host = data_dir / "ipc" / group_folder / rel
     elif p.startswith("/workspace/global/"):
         rel = p[len("/workspace/global/"):]
-        return str(pathlib.Path(groups_dir) / "global" / rel)
+        host = groups_dir / "global" / rel
     else:
-        # Absolute path or unknown — return as-is
-        return container_path if pathlib.Path(container_path).is_absolute() else None
+        # Unrecognized prefix — log and return None
+        log.warning("_resolve_container_path: unrecognized path prefix in %r", container_path)
+        return None
+
+    return str(host)
 
 
 def _require_own_or_main(group_folder: str, target_folder: str, is_main: bool) -> None:

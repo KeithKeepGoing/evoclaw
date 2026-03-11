@@ -49,6 +49,9 @@ IPC_RESULTS_DIR = "/workspace/ipc/results"
 # agent 的工作目錄，對應到 host 的 groups/<folder>/ 目錄
 WORKSPACE = "/workspace/group"
 
+# Module-level chat JID — populated from input JSON so tool_send_file can auto-detect it
+_input_chat_jid: str = ""
+
 
 def _log(msg: str) -> None:
     """Write a progress message to stderr (visible in Docker Desktop logs)."""
@@ -265,23 +268,34 @@ def tool_run_agent(prompt: str, context_mode: str = "isolated") -> str:
         return f"Error spawning subagent: {e}"
 
 
-def tool_send_file(chat_jid: str, file_path: str, caption: str = "") -> str:
+def tool_send_file(chat_jid: str = "", file_path: str = "", caption: str = "") -> str:
     """Send a file to a chat. file_path must be an absolute path inside the container
     (e.g., /workspace/group/output/report.pptx). The file must have been written
-    to /workspace/group/ first so it maps to the host filesystem."""
+    to /workspace/group/output/ first (create the directory with os.makedirs if needed)
+    so it maps to the host filesystem via Docker volume mount."""
+    global _input_chat_jid
+    # Auto-detect chat_jid from input if not explicitly provided by the LLM
+    effective_jid = chat_jid or _input_chat_jid or ""
+    if not effective_jid:
+        return "Error: chat_jid not provided and not available from input"
     if not file_path:
         return "Error: file_path is required"
 
+    # Ensure the parent directory of the file exists (common failure point)
+    parent = Path(file_path).parent
+    if str(parent) != file_path:  # guard against root path edge case
+        parent.mkdir(parents=True, exist_ok=True)
+
     payload = {
         "type": "send_file",
-        "chatJid": chat_jid,
+        "chatJid": effective_jid,
         "filePath": file_path,
         "caption": caption,
     }
-    msg_file = Path(IPC_MESSAGES_DIR) / f"file_{int(time.time()*1000)}_{os.getpid()}.json"
     Path(IPC_MESSAGES_DIR).mkdir(parents=True, exist_ok=True)
+    msg_file = Path(IPC_MESSAGES_DIR) / f"file_{int(time.time()*1000)}_{os.getpid()}.json"
     msg_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    return f"File queued for delivery: {os.path.basename(file_path)}"
+    return f"✅ File queued: {os.path.basename(file_path)}"
 
 
 def tool_glob(pattern: str, path: str = WORKSPACE) -> str:
@@ -908,12 +922,14 @@ def main():
     _log("JSON parsed OK")
 
     # 將解析後的輸入資料存到全域變數，讓工具函式（如 tool_list_tasks）可以存取
-    global _input_data
+    global _input_data, _input_chat_jid
     _input_data = inp
 
     prompt = inp.get("prompt", "")
     group_folder = inp.get("groupFolder", "")
     chat_jid = inp.get("chatJid", "")
+    # Store at module level so tool_send_file can auto-detect it if the LLM omits chat_jid
+    _input_chat_jid = chat_jid
     secrets = inp.get("secrets", {})
     # 演化引擎注入的動態行為提示（表觀遺傳：環境感知 + 群組基因組風格）
     # 若為空字串則不添加任何附加指引
