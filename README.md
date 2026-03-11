@@ -13,7 +13,7 @@
 以 Python 打造的 AI 助理框架，支援 Gemini、OpenAI 相容 API 及 Claude。
 內建**進化引擎**，讓助手隨著使用自動學習與改進。
 
-**v1.10.7** — **修復 Telegram 檔案發送 Bug**：解決二進位檔案（.pptx、.pdf 等）發送時的 `cp950` 編碼錯誤，改用 `InputFile` 並明確指定 MIME type，確保檔案完整傳輸。**v1.10.0** — 完整基因組演化 + 可靠性 + 安全強化：_stop_container 等待 proc.wait()、/api/env 鍵白名單、asyncio.Lock 替換 threading.Lock、formality/technical_depth 三維基因組演化、排程器透過 GroupQueue 序列化、WebPortal 1 小時 session 過期、.env 遮蔽 macOS 相容性修復、DevEngine JID 回退清晰錯誤訊息。
+**v1.10.8** — **動態容器工具熱插拔（Skills 2.0）**：DevEngine 生成的 Skill 現可新增 Python 工具至容器，不需重建 image。`data/dynamic_tools/` 掛載至 `/app/dynamic_tools:ro`，啟動時自動 import 並注冊至 Gemini / Claude / OpenAI 三大 provider；Skills manifest 新增 `container_tools:` 欄位。**v1.10.7** — 修復 Telegram 二進位檔案發送 `cp950` 編碼錯誤。
 
 ---
 
@@ -54,6 +54,7 @@
 - 📊 **Web Dashboard** — 6 個分頁完整監控（狀態、日誌、Agent、設定、對話、進化），狀態監控支援 Subagent 親子層級視覺化與即時活動追蹤
 - 🏥 **健康監控系統** — 即時追蹤 Container 隊列、錯誤率、記憶體使用量
 - 🛠️ **DevEngine** — 7 階段 LLM 驅動自動化開發引擎（Analyze → Design → Implement → Test → Review → Document → Deploy），支援 auto/interactive 雙模式；Dashboard 內建 Prompt 輸入表單、7 階段動態 Badge 指示器、即時日誌終端機、互動模式確認面板、Toast 通知系統
+- 🔌 **動態容器工具熱插拔（Skills 2.0）** — Skills manifest 支援 `container_tools:` 欄位，安裝的 Python 工具自動掛載至容器 `/app/dynamic_tools/`，不需重建 Docker image
 - 📝 **完整文檔系統** — CHANGELOG.md、RELEASE.md 規範化發布流程
 
 ---
@@ -221,7 +222,8 @@ evoclaw/
 │   └── agent-runner/
 │       ├── agent.py ← 多模型代理（Gemini / OpenAI 相容 / Claude）
 │       └── requirements.txt ← google-genai, openai, anthropic
-├── skills_engine/ ← 插件系統
+├── dynamic_tools/ ← Skills container_tools 熱插拔目錄（掛載至 /app/dynamic_tools:ro）
+├── skills_engine/ ← 插件系統（支援 container_tools: 欄位）
 ├── scripts/ ← CLI 工具腳本
 │   └── add_indexes_migration.py ← 資料庫索引優化（新增）
 ├── tests/ ← 測試框架
@@ -453,6 +455,60 @@ Or via IPC:
 | `superpowers-writing-plans` | Bite-sized atomic task plans with TDD steps, saved to docs/superpowers/plans/ |
 
 Each skill adds a `SKILL.md` file to `docs/superpowers/<name>/` in your project, which Claude Code reads as instructions when that workflow is needed.
+
+---
+
+## Skills 2.0 — 動態容器工具（v1.10.8）
+
+### 問題
+DevEngine 生成的 Skill 可新增 Python 工具，但 Docker container 是靜態 image — 無法在執行時載入新工具，除非重建 image。
+
+### 解決方案：`container_tools:` + 熱插拔掛載
+
+```
+Host: data/dynamic_tools/my_tool.py
+      │  (docker run -v .../dynamic_tools:/app/dynamic_tools:ro)
+      ▼
+Container: /app/dynamic_tools/my_tool.py
+      │  (_load_dynamic_tools() → importlib.util.exec_module)
+      ▼
+Tool registry: register_dynamic_tool("my_tool", ...) → LLM 可呼叫
+```
+
+### Skill Manifest 新欄位
+
+```yaml
+skill: my-skill
+version: "1.0.0"
+core_version: "1.10.8"
+adds:
+  - docs/superpowers/my-skill/SKILL.md   # 注入系統提示（既有機制）
+container_tools:
+  - dynamic_tools/my_tool.py             # 熱載入工具（不需重建 image）
+modifies: []
+```
+
+### 動態工具模組格式
+
+```python
+# skills/my-skill/add/dynamic_tools/my_tool.py
+def _my_tool(args: dict) -> str:
+    return f"Result: {args['query']}"
+
+# register_dynamic_tool 由 agent 啟動時注入模組命名空間
+register_dynamic_tool(
+    name="my_tool",
+    description="Does something useful",
+    schema={
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    },
+    fn=_my_tool,
+)
+```
+
+安裝後，下次 container 啟動時 `_load_dynamic_tools()` 自動 import，工具即加入所有 provider（Gemini / Claude / OpenAI）的宣告列表。
 
 ---
 

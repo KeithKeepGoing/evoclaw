@@ -50,6 +50,8 @@ Ships with a built-in **evolution engine** that makes the assistant adapt and im
 - Available tools: Bash, Read, Write, Edit, Glob, Grep, WebFetch, send_message, schedule_task, list_tasks, pause_task, resume_task, cancel_task
 - **100% Python** — no Node.js, no TypeScript, no compilation step
 - 🧬 **Evolution Engine** — AI behavior auto-optimizes with use (see below)
+- 🛠️ **DevEngine** — 7-stage LLM-powered development pipeline (Analyze → Design → Implement → Test → Review → Document → Deploy)
+- 🔌 **Dynamic Container Tool Hot-swap (Skills 2.0)** — skills can add new Python tools to containers without rebuilding the Docker image (`container_tools:` manifest field)
 
 ---
 
@@ -352,6 +354,68 @@ Telegram / WhatsApp / Discord / Slack / Gmail
 - Evolution Engine: fitness tracking + epigenetic hints + group genome + immune system
 
 For full architecture details see [docs/SPEC.md](docs/SPEC.md).
+
+---
+
+## Skills 2.0 — Dynamic Container Tools (v1.10.8)
+
+### The Problem
+DevEngine can generate new Python tools for agents, but Docker containers are static images — you can't load new tool files at runtime without `docker build`.
+
+### The Solution: `container_tools:` + Hot-swap Mount
+
+```
+Host: data/dynamic_tools/my_tool.py
+      │  (docker run -v .../dynamic_tools:/app/dynamic_tools:ro)
+      ▼
+Container: /app/dynamic_tools/my_tool.py
+      │  (_load_dynamic_tools() → importlib.util.exec_module)
+      ▼
+Tool registry: register_dynamic_tool("my_tool", ...) → available to LLM
+```
+
+Every container gets `data/dynamic_tools/` mounted at `/app/dynamic_tools:ro`. On startup, `agent.py` scans and imports all `*.py` files. Each file calls `register_dynamic_tool()` (injected into its namespace) to register itself with **all three provider declaration lists** (Gemini, Claude, OpenAI-compatible).
+
+### Skill Manifest (`manifest.yaml`)
+
+```yaml
+skill: my-skill
+version: "1.0.0"
+core_version: "1.10.8"
+adds:
+  - docs/superpowers/my-skill/SKILL.md   # injected into system prompt (existing mechanism)
+container_tools:
+  - dynamic_tools/my_tool.py             # hot-loaded tool — no image rebuild needed
+modifies: []
+```
+
+### Dynamic Tool Module Format
+
+```python
+# skills/my-skill/add/dynamic_tools/my_tool.py
+def _my_tool(args: dict) -> str:
+    return f"Result: {args['query']}"
+
+# register_dynamic_tool is injected by agent.py before exec_module
+register_dynamic_tool(
+    name="my_tool",
+    description="Does something useful",
+    schema={
+        "type": "object",
+        "properties": {"query": {"type": "string", "description": "The query"}},
+        "required": ["query"],
+    },
+    fn=_my_tool,
+)
+```
+
+### Workflow: DevEngine → Installable Tool Skill
+
+1. Ask the agent to build a skill with `container_tools:` using DevEngine
+2. DevEngine deploys the files (including `skills/my-skill/add/dynamic_tools/my_tool.py`)
+3. Install: `{"type": "apply_skill", "skill_path": "skills/my-skill"}`
+4. `skills_engine/apply.py` copies the tool to `data/dynamic_tools/`
+5. Next container run — tool is available to the LLM. **No `docker build` needed.**
 
 ---
 
