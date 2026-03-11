@@ -152,4 +152,4 @@ After release, verify:
 
 ---
 
-**Last Updated:** 2026-03-11 (v1.10.1)
+**Last Updated:** 2026-03-11 (v1.10.7)
