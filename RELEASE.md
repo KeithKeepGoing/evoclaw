@@ -1,723 +1,155 @@
-# Release Notes
+# Release Process
 
-## v1.10.1 — File Delivery System + Rename Eve (2026-03-11)
+This document describes the release process for EvoClaw.
 
-This release adds a complete Docker-to-Telegram file delivery pipeline and renames the default assistant from Andy to Eve.
+## Pre-release Checklist
 
-### File Delivery System
+Before creating a new release, ensure:
 
-Container agents can now send files (PDFs, PowerPoint, images, etc.) directly to Telegram users. The agent writes the file to `/workspace/group/output/`, then calls `mcp__evoclaw__send_file` with the container path. The IPC watcher resolves the container path to the host filesystem via `_resolve_container_path()` and routes the file through `TelegramChannel.send_file()`, which uses `bot.send_document()`. If the file is not found or sending fails, the user receives a text notification as fallback.
+- [ ] All new features are documented in `CHANGELOG.md`
+- [ ] `README.md` version banner is updated
+- [ ] All tests pass (`python -m pytest tests/`)
+- [ ] No critical bugs in the issue tracker
+- [ ] Version number is updated in relevant files
 
-Path resolution supports four container mount points: `/workspace/group/` → `groups/{folder}/`, `/workspace/project/` → project root, `/workspace/ipc/` → `data/ipc/{folder}/`, and `/workspace/global/` → `groups/global/`.
+## Release Steps
 
-### Rename: Andy → Eve
+### 1. Update Documentation
 
-The default assistant name has been updated from Andy to Eve across all configuration files, documentation, source code, and container defaults. Users who have set `ASSISTANT_NAME` in their `.env` are unaffected.
+**Update `CHANGELOG.md`:**
+- Add new version section with date
+- List all changes under `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`
+- Move `[Unreleased]` changes to the new version
 
----
+**Update `README.md`:**
+- Update version banner (e.g., `**v1.10.1**`)
+- Ensure feature list is current
 
-## v1.10.0 — Full Genome Evolution + Reliability + Security Hardening (2026-03-11)
-
-This release closes 8 remaining architecture issues identified in deep review: zombie subprocesses, an environment variable injection vector, threading/async lock misuse, incomplete genome evolution, scheduler serialization bypass, unbounded session memory, a macOS Docker incompatibility, and a confusing DevEngine error path.
-
-### Fixed: _stop_container Zombie Subprocesses (#1)
-
-`_stop_container` previously called `asyncio.create_subprocess_exec` without awaiting `proc.wait()`. The Docker stop command ran fire-and-forget, creating zombie subprocesses and making cleanup unreliable. The fix awaits `proc.wait()` and adds `--time 10` for a graceful 10-second shutdown window, with stdout/stderr redirected to DEVNULL to avoid pipe buffering issues.
-
-### Fixed: /api/env Injection Vector (#2)
-
-The dashboard `/api/env` POST endpoint accepted arbitrary environment variable keys, allowing any key (including `PATH`, `LD_PRELOAD`, etc.) to be written to `.env`. A new `EDITABLE_ENV_KEYS` frozenset in `config.py` restricts editable keys to those EvoClaw actually uses. Unknown keys return a `400`-style error response. Newline characters (`\r`, `\n`, `\x00`) are stripped from values to prevent `.env` format injection.
-
-### Fixed: threading.Lock in Async Coroutines (#3)
-
-`_active_lock` was a `threading.Lock()` but was acquired inside `async def` coroutines (`_stream_stderr`, `run_container_agent`, `update_container_activity`). While not technically unsafe in CPython due to the GIL, it blocks the event loop during lock acquisition. The lock is now `asyncio.Lock()` and all coroutine callers use `async with`. The dashboard thread's `get_active_containers()` call now uses a GIL-safe shallow copy without needing the asyncio lock.
-
-### Fixed: Incomplete Genome Evolution (#4)
-
-`evolve_genome_from_fitness` only evolved `response_style`. The `formality` and `technical_depth` dimensions were tracked in the database but never modified by the evolution engine. Both dimensions now evolve each cycle: formality increases with high fitness + fast responses and nudges toward neutral (0.5) under low fitness; technical_depth increases with high-fitness fast responses and decreases under very slow or low-fitness conditions. All values are clamped to [0.0, 1.0] and rounded to 3 decimal places.
-
-### Fixed: Scheduler Bypasses GroupQueue (#5)
-
-`start_scheduler_loop` called `asyncio.create_task(run_task(...))` directly, bypassing `GroupQueue`. This meant scheduled tasks could run concurrently with message-response containers for the same group, causing race conditions on shared state. The scheduler now accepts an optional `group_queue` parameter and routes tasks through `GroupQueue.enqueue_task()` for proper per-group serialization. The fallback (no `group_queue`) preserves backward compatibility.
-
-### Fixed: Unbounded Session Memory in WebPortal (#6)
-
-The WebPortal `_sessions` dict grew without bound. A 1-hour TTL (`_SESSION_TTL_SECONDS = 3600`) is now enforced. Sessions track a `last_seen` timestamp updated on each poll request. A lazy expiry function runs every 60 polls to remove expired sessions without adding overhead to every request.
-
-### Fixed: .env Shadow Mount macOS Incompatibility (#7)
-
-The v1.9.0 `.env` security shadow mount used `source=/dev/null` in a bind mount. On macOS Docker Desktop, `/dev/null` cannot be used as a bind mount source. The fix creates a persistent empty temporary file at startup (`tempfile.mkstemp`) and registers an `atexit` handler to clean it up. The regular `-v` bind mount syntax is used for compatibility.
-
-### Fixed: DevEngine JID Fallback Error Message (#8)
-
-When a `dev_task` IPC message arrived from a group folder not yet in the registered groups, the fallback `group_folder` string was passed as a JID. If `_run_dev_task` then couldn't find a group by that JID, it logged a confusing error without trying a folder-based lookup. The fix adds a two-step lookup (JID first, then folder fallback) and emits a clear error message identifying both the lookup value and the reason for failure.
-
----
-
-## v1.9.0 — Security Hardening + Reliability Improvements (2026-03-11)
-
-This release focuses on two critical security fixes and several high/medium reliability improvements across the host daemon.
-
-### Security Fixes
-
-#### CRITICAL: Dashboard Network Exposure
-The dashboard previously bound to `0.0.0.0`, making it accessible on all network interfaces including external ones. It now defaults to `127.0.0.1` (localhost only). The bind address is configurable via the `DASHBOARD_HOST` environment variable. Additionally, a startup warning is now logged when `DASHBOARD_PASSWORD` is not set, making unprotected dashboard instances visible in logs.
-
-#### MEDIUM: .env Exposure via :ro Container Mount
-The main group's agent container mounts the project root read-only. If a `.env` file exists in the project root, it was readable inside the container. A startup security warning is now logged, and the `.env` file is shadowed using a bind mount from `/dev/null`, preventing container access to host secrets.
-
-#### MEDIUM: Dashboard XSS in Attribute Contexts
-The JavaScript `esc()` function in the dashboard SPA now escapes double quotes (`"` → `&quot;`) and single quotes (`'` → `&#39;`) in addition to `&`, `<`, `>`. This prevents XSS in HTML attribute contexts such as `value="${esc(...)}"`.
-
-### Reliability Fixes
-
-#### HIGH: skills_engine Import Fix
-The previous `importlib.util.spec_from_file_location` approach for loading `skills_engine` did not register the package's submodules, causing `from .apply import apply_skill` to fail with ImportError. The fix adds the repo root to `sys.path` once at module load time (not repeated on each call), then uses standard `importlib.import_module("skills_engine")` which correctly handles package-relative imports.
-
-#### HIGH: DevEngine Concurrent Task Serialization
-Multiple concurrent `dev_task` IPC messages for the same group could race, launching multiple DevEngine pipelines simultaneously. An asyncio lock and active-JID set now ensure only one dev_task runs per group at a time. Additional requests receive a user-visible notification to wait.
-
-#### HIGH: Timeout Watchdog No Longer Drops Messages
-The 300-second container timeout previously called `on_success()` on timeout to prevent messages from being "stuck forever." This silently discarded messages. The cursor is now NOT advanced on timeout, preserving the at-least-once delivery guarantee. The user receives a notification that the request will be retried automatically.
-
-#### HIGH: _write_dev_log File Handle Leak
-The dev engine log writer opened a file handle without a `with` statement, leaking file descriptors under high dev session load. Fixed with a proper `with` context manager.
-
-#### MEDIUM: SQLite WAL Mode
-The SQLite database now enables WAL (Write-Ahead Logging) mode, `synchronous=NORMAL`, and `busy_timeout=5000ms`. WAL allows concurrent reads alongside writes, preventing `SQLITE_BUSY` errors when the dashboard thread reads while the message loop writes.
-
-#### MEDIUM: Parallel stdout/stderr Collection
-The container runner's `_collect()` function previously awaited `proc.stdout.read()` before streaming stderr, meaning the dashboard activity counter (fed by stderr) did not update until stdout was fully read. Both are now gathered concurrently via `asyncio.gather`.
-
-#### MEDIUM: Test Parameter Fixes
-`test_core.py` used `since_timestamp=` keyword (wrong parameter name, correct is `last_timestamp`) and called `get_due_tasks()` with no argument (signature requires `now_ms: int`). Both are corrected.
-
-#### MEDIUM: Cursor Advancement Consolidated
-The `_message_loop` function previously computed `new_max_timestamp` and an `advance_cursor` closure that were never used (dead code) — the actual cursor advancement happened exclusively in `_process_messages_for_jid`. The dead code is removed; there is now a single authoritative cursor computation path.
-
----
-
-## v1.8.0 — Architecture Reliability Improvements (2026-03-11)
-
-### Fixed
-- Fix #1: Version alignment — pyproject.toml now correctly reports v1.8.0
-- Fix #2: Remove sys.path manipulation in ipc_watcher.py, use importlib for skills_engine
-- Fix #3: Add periodic orphan container cleanup loop (every 5 min) alongside startup cleanup
-- Fix #4: IPC error alerting — failed IPC files now trigger warning message to main group
-- Fix #5: Circuit breaker for Docker — opens after 3 consecutive failures, prevents cascade
-- Fix #6: Asyncio lock on apply_skill/uninstall_skill — prevents concurrent skill modification races
-- Fix #7: Main group uniqueness guard — registering a new main group auto-demotes old main
-- Fix #8: Expanded test coverage — new test_infrastructure.py covering channels, group_queue, webportal, circuit breaker, IPC errors, main group guard
-- Fix #9: Container run timeout watchdog — 5-minute timeout with cursor advancement fallback prevents message loss on crash
-
----
-
-## v1.7.0 — Superpowers Skills Integration (2026-03-11)
-
-This release integrates the [Superpowers](https://github.com/KeithKeepGoing/superpowers) methodology as installable skills packages into EvoClaw's Skills Engine.
-
-### What's New
-
-#### 12 Superpowers Skills as Installable Packages
-
-All 12 Superpowers workflow skills are now packaged for EvoClaw's skills_engine, installable via the `/apply_skill` IPC command from the main group.
-
-| Skill | Purpose |
-|---|---|
-| superpowers-brainstorming | Design-first gate before any implementation |
-| superpowers-dispatching-parallel-agents | Parallel agent dispatch for independent domains |
-| superpowers-executing-plans | Sequential plan execution with review checkpoints |
-| superpowers-finishing-a-development-branch | Verify → choose merge/PR/keep/discard |
-| superpowers-receiving-code-review | Technical evaluation, not performative agreement |
-| superpowers-requesting-code-review | Dispatch code-reviewer subagent after each task |
-| superpowers-subagent-driven-development | Fresh subagent per task + 2-stage review |
-| superpowers-systematic-debugging | 4-phase root cause analysis (Iron Law: no fix without root cause) |
-| superpowers-test-driven-development | RED-GREEN-REFACTOR (Iron Law: test first always) |
-| superpowers-using-git-worktrees | Isolated workspace with clean baseline verification |
-| superpowers-verification-before-completion | Evidence-based gate before claiming completion |
-| superpowers-writing-plans | Bite-sized atomic task plans with TDD steps |
-
-#### Installation
-
-From the main group, send:
-```
-/apply_skill superpowers-brainstorming
-```
-Or via IPC:
-```json
-{"type": "apply_skill", "skill": "superpowers-brainstorming"}
-```
-
-#### Architecture
-
-Each skill package follows the structure:
-```
-skills/superpowers-<name>/
-  manifest.yaml          # Skills engine metadata
-  add/
-    docs/superpowers/
-      <name>/
-        SKILL.md         # Full skill instructions
-```
-
-### Previous Release
-
-See CHANGELOG.md for full history.
-
----
-
-## v1.6.1 — 2026-03-10
-
-> Bug Fix 版：Health Monitor 接入、WebPortal 修正、核心測試補齊
-
-### Bug Fixes
-
-**Health Monitor 終於上線**
-
-`health_monitor.py` 一直存在但從未被啟動。本版本將 `health_monitor_loop()` 接入 `asyncio.gather()`，現在每 60 秒自動檢查：Container 排隊、錯誤率、記憶體用量（閾值 500MB 警告）、DB 大小（閾值 100MB 警告）。
-
-**WebPortal 回覆修正**
-
-一般對話（非 IPC 觸發）的 Bot 回覆現在也會推送到 WebPortal（`http://localhost:8766`）。之前只有 IPC 路徑有呼叫 `deliver_reply()`，正常聊天流程的回覆不會顯示在瀏覽器。
-
-### Tests
-
-新增 `tests/test_core.py`，30+ 個測試案例覆蓋：DB 層（12）、Router（4）、IPC Scheduler（6）、IPC 權限（3）、Health Monitor（4）、Dev Log（3）。
-
-### 升級方式
+### 2. Commit Changes
 
 ```bash
-git pull
-python run.py
+git add CHANGELOG.md README.md
+git commit -m "chore: prepare release v1.10.1"
 ```
 
----
-
-## v1.6.0 — 2026-03-10
-
-> DevEngine Dashboard 全面現代化 — 直接從 Dashboard 啟動、監控、控制開發流程
-
-### 新功能
-
-**1. 直接從 Dashboard 啟動 DevEngine**
-
-不再需要透過聊天室輸入 IPC 指令。在 🛠️ DevEngine 分頁直接輸入需求、選擇模式，點擊按鈕即可啟動。
-
-**2. 7 階段動態 Badge 指示器**
-
-每個 stage 即時顯示 ⬜ 待處理 / ⏳ 進行中（閃爍動畫）/ ⏸ 暫停 / ✅ 完成。
-
-**3. 即時執行日誌終端機**
-
-黑色背景、等寬字體，每 2 秒自動輪詢新日誌，自動捲動。範例：
-
-```
-[14:23:01] 🚀 DevEngine 啟動（mode=auto）
-[14:23:02] 🔧 [ANALYZE] 開始執行...
-[14:23:18] ✅ [ANALYZE] 完成（1247 字元）
-```
-
-**4. 互動模式確認面板**
-
-Interactive mode 下，每個 stage 完成後 Dashboard 自動出現確認面板，選擇繼續或停止。
-
-**5. Toast 通知系統**
-
-右下角堆疊式 Toast，支援成功/錯誤/資訊，3.5 秒後自動淡出。
-
-### 新 API
-
-| 方法 | 路徑 | 說明 |
-|------|------|------|
-| POST | `/api/dev/start` | 從 Dashboard 建立並觸發 DevEngine session |
-| GET  | `/api/dev/log/<id>?offset=N` | 取得增量日誌行（JSON 字串陣列） |
-
-### 升級方式
+### 3. Create Git Tag
 
 ```bash
-git pull
-python run.py
+# Create annotated tag
+git tag -a v1.10.1 -m "Release version 1.10.1"
+
+# Verify tag
+git tag -l
+git show v1.10.1
 ```
 
----
-
-## v1.5.1 — 2026-03-10
-
-> 程式碼品質大清理：死碼移除、命名衝突修正、Skills Engine 整合、測試重寫
-
-### 主要變更
-
-**死碼清理**
-- 刪除 `host/web_dashboard.py`（438 行 aiohttp 版儀表板，從未被任何模組 import）
-- 刪除 `host/dashboard_charts.py`（37 行，只有設定 dict，從未被 import）
-- 刪除整個 `host/stages/` 目錄（8 個 stage 模組，全部是 `return "TODO: ..."` 佔位符，已由 v1.5.0 DevEngine 完整取代）
-
-**`register_channel` 命名衝突修正**
-
-`channels/__init__.py` 的 `register_channel(name, cls)` 與 `router.py` 的 `register_channel(ch)` 語義完全不同（前者接受 class，後者接受 instance），原本共用同名造成混淆。本版本將前者改名為 `register_channel_class()`，消除歧義。
-
-**Skills Engine IPC 整合**
-
-Skills Engine（`skills_engine/`）現在已接入 IPC 訊息流，agent 可在對話中直接管理 Skill Plugins：
-
-```json
-// 安裝 skill（主群組限定）
-{"type":"apply_skill","skill_path":"skills/add-slack.md","requestId":"r1"}
-
-// 移除 skill（主群組限定）
-{"type":"uninstall_skill","skill_name":"add-slack","requestId":"r2"}
-
-// 列出已安裝 skills（任何群組）
-{"type":"list_skills","requestId":"r3"}
-```
-
-結果寫入 `data/ipc/<group>/results/<requestId>.json`。
-
-**測試重寫**
-
-`tests/test_dev_engine.py` 完整重寫以對應 v1.5.0 引入的新 DevEngine API，不再測試已刪除的 `DevContext`、`run_pipeline()` 等舊介面。
-
-### 升級方式
+### 4. Push to Remote
 
 ```bash
-git pull
-python run.py
-```
-
-不需重建 Docker image。
-
----
-
-## v1.5.0 — 2026-03-10
-
-> DevEngine：7 階段 LLM 驅動自動化開發引擎
-
-### 新功能
-
-**DevEngine 完整實作**
-
-EvoClaw 現在可以真正地自主開發軟體功能。告訴 agent 你想要什麼，DevEngine 會自動完成需求分析、架構設計、程式碼撰寫、測試、審查、文件，並把檔案寫到磁碟。
-
-**7 個 LLM 驅動階段：**
-
-| 階段 | 說明 |
-|------|------|
-| 🔍 Analyze | 理解需求，定義功能範疇 |
-| 📐 Design | 設計架構、API 簽名、資料流 |
-| 💻 Implement | 撰寫完整 Python 程式碼 |
-| 🧪 Test | 撰寫 pytest 測試案例 |
-| 🔎 Review | LLM 安全審查 + 品質把關（PASS/FAIL） |
-| 📝 Document | 產生 README 章節與 CHANGELOG |
-| 🚀 Deploy | 解析 `--- FILE: path ---` 區塊，寫入磁碟 |
-
-**觸發方式：**
-
-透過 IPC（請 agent 寫入到 tasks/ 目錄）：
-```json
-{"type":"dev_task","prompt":"Add a metrics endpoint","mode":"auto"}
-```
-
-Resume 暫停的 session：
-```json
-{"type":"dev_task","session_id":"dev_1712345678_abc","prompt":""}
-```
-
-**Dashboard 整合：**
-- 新 🛠️ DevEngine 分頁（第 7 個）
-- Session 進度條（n/7 完成）
-- 各階段 Artifact 預覽、Resume / Cancel 按鈕
-
-### Bug Fixes
-
-- 修正 dev_engine.py 的 3 個嚴重錯誤（import 路徑、DB API、stage 邏輯）
-- Review 階段不再錯誤地使用 immune system
-
-### 升級方式
-
-```bash
-git pull
-python run.py
-```
-
-不需重建 Docker image（所有修改均在 host 端）。
-
----
-
-## v1.4.3 — 2026-03-10
-
-> Subagent 親子層級追蹤 + 即時 Container 活動捕捉
-
-### 新功能
-
-**Dashboard 現在可以看到 Subagent 在幹嘛**
-
-過去 Dashboard 只能看到有幾個 container 在跑，無法分辨哪些是主 agent、哪些是 subagent，也看不到 container 目前正在執行什麼動作。
-
-這次全面改善：
-
-**① 親子關係追蹤**
-`_active_containers` 新增 `parent_container` 欄位。主 agent 為 `None`，subagent 記錄父 container 名稱。`ipc_watcher` 在 `spawn_agent` 時自動找出父 container 並傳入。
-
-**② 即時 stderr 串流**
-`container_runner.py` 非 Windows 路徑改用串流讀取 stderr（`_stream_stderr()`），不再等 container 結束才讀取。`agent.py` 的每一行 `_log()` 輸出（Input received → Calling LLM → Tool: Bash → Done）即時更新至 `current_activity` 欄位。
-
-**③ Dashboard 視覺化層級**
-「Active Agent Containers」表格：
-- 新增 *Activity* 欄：即時顯示最新 `_log()` 訊息
-- Subagent 以 `↳` 縮排顯示在父 container 下方
-- 色碼徽章：🟡 subagent / 🟣 scheduled / 🔵 message
-
-### 升級方式
-
-```bash
-git pull
-python run.py
-```
-
-不需重建 Docker image（所有修改均在 host 端）。
-
----
-
-## v1.4.2 — 2026-03-10
-
-> Docker Desktop 日誌即時顯示修正（完整版）
-
-### 修正內容
-
-**Docker Desktop container log 在執行過程中空白**
-
-`agent.py` 整個執行過程（等待 LLM 回應）都沒有寫任何東西到 stdout/stderr，導致 Docker Desktop 日誌介面完全空白。
-
-新增 `_log()` 函式，在以下節點寫入 stderr 進度訊息：
-- `[evoclaw] Input received, parsing...`
-- `[evoclaw] JSON parsed OK`
-- `[evoclaw] Starting | group=xxx | backend=gemini`
-- `[evoclaw] Calling LLM API...`
-- `[evoclaw] Tool: Bash(command=ls -la)` (每次工具呼叫)
-- `[evoclaw] Done | status=success`
-
-### 升級方式
-
-```bash
-git pull
-docker build -t evoclaw-agent container/
-python run.py
-```
-
-*需要重建 Docker image*（修改在 container/agent-runner/agent.py）
-
----
-
-## v1.4.1 — 2026-03-10
-
-> Docker Desktop 日誌即時顯示修正
-
-### 修正內容
-
-**Docker Desktop container log 看不到輸出**
-
-`docker run -i`（無 TTY）模式下，Python stdout 預設為完全緩衝，container 執行過程中 Docker Desktop 日誌介面顯示空白。
-
-加入 `PYTHONUNBUFFERED=1` 環境變數後，Python 每行輸出立即 flush，Docker Desktop 可即時看到 container 執行狀態。
-
-### 升級方式
-
-```bash
-git pull
-python run.py
-```
-
-不需要重建 Docker image（此為 host 端設定，透過環境變數傳入 container）。
-
----
-
-## v1.6.0 — Subagent Support
-
-### What's New
-
-Agents can now spawn subagents — isolated Docker containers that handle specific subtasks and return results to the parent agent.
-
-### New Tool: `mcp__evoclaw__run_agent`
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `prompt` | string | ✅ | The task for the subagent to execute |
-| `context_mode` | string | ❌ | `isolated` (default) or `group` |
-
-**Returns:** The subagent's final text output (blocks up to 300s)
-
-### Use Cases
-- Parallel research: spawn multiple subagents for different topics
-- Task delegation: hand off complex subtasks without polluting parent context
-- Isolated code execution: run risky operations in a throwaway container
-
-### How It Works
-1. Parent agent calls `mcp__evoclaw__run_agent(prompt="...")`
-2. IPC request written to `ipc/tasks/` → picked up by `ipc_watcher`
-3. Host spawns new Docker container with the subagent prompt
-4. Subagent runs its agentic loop and produces a final response
-5. Result written to `ipc/<group>/results/{request_id}.json`
-6. Parent agent receives result (polls file, timeout 300s)
-
----
-
-# EvoClaw 發布流程規範
-
-本文件規範 EvoClaw 專案的發布流程，確保每次發布都經過完整測試與審查。
-
----
-
-## 發布週期
-
-- **主要版本 (Major)**：每 3-6 個月，包含重大功能更新或不相容變更
-- **次要版本 (Minor)**：每月或每兩月，包含新功能新增
-- **修補版本 (Patch)**：視需要發布，主要用於錯誤修正
-
----
-
-## 發布前檢查清單
-
-### 1. 代碼品質檢查
-- [ ] 所有 Python 檔案通過 `python -m py_compile` 檢查
-- [ ] 執行所有測試用例並確保通過
-  ```bash
-  python -m tests.test_immune_enhanced
-  ```
-- [ ] 檢查是否有未提交的代碼變更
-- [ ] 確認 `CHANGELOG.md` 已更新
-
-### 2. 功能驗證
-- [ ] Web Dashboard 正常運作（port 8765）
-- [ ] Web Portal 正常運作（port 8766）
-- [ ] 健康監控系統正常運行
-- [ ] 免疫系統能正確檢測 injection 攻擊
-- [ ] 排程任務正常執行
-- [ ] 容器隔離機制正常
-
-### 3. 文檔檢查
-- [ ] `README.md` 已更新最新版本資訊
-- [ ] `CHANGELOG.md` 已記錄所有變更
-- [ ] 必要時更新 `docs/` 目錄下的技術文檔
-
-### 4. 效能與安全
-- [ ] 資料庫索引已建立
-- [ ] 記憶體使用量在正常範圍
-- [ ] 無明顯的資源洩漏
-- [ ] 免疫 pattern 已更新最新版本
-
----
-
-## 發布流程
-
-### 步驟 1：準備發布分支
-```bash
-# 切換到 main 分支
-git checkout main
-
-# 拉取最新代碼
-git pull origin main
-
-# 建立發布分支（例如：release-1.3.0）
-git checkout -b release-1.3.0
-```
-
-### 步驟 2：更新版本號
-在以下位置更新版本號：
-- `CHANGELOG.md` - 更新標題日期
-- `README.md` - 如有版本提及則更新
-
-### 步驟 3：最終測試
-```bash
-# 執行所有測試
-python -m pytest tests/ -v
-
-# 或執行特定測試
-python -m tests.test_immune_enhanced
-```
-
-### 步驟 4：提交發布
-```bash
-# 提交所有變更
-git add .
-git commit -m "release: 準備發布 v1.3.0"
-
-# 推送到遠端
-git push origin release-1.3.0
-```
-
-### 步驟 5：建立 Pull Request
-- 在 GitHub 建立 PR：`release-1.3.0` → `main`
-- 標題格式：`Release v1.3.0`
-- 描述中包含：
-  - 主要變更項目
-  - 測試結果
-  - 已知問題（如有）
-
-### 步驟 6：代碼審查
-- 至少需要 1 位審查者批准
-- 確認所有 CI 檢查通過
-- 解決所有審查意見
-
-### 步驟 7：合併與發布
-```bash
-# 合併到 main 分支
-git checkout main
-git pull origin main
-git merge release-1.3.0
+# Push commits
 git push origin main
 
-# 建立 Git Tag
-git tag -a v1.3.0 -m "Release version 1.3.0"
-git push origin v1.3.0
+# Push tag
+git push origin v1.10.1
 ```
 
-### 步驟 8：GitHub Release
-1. 前往 GitHub 專案頁面
-2. 點擊「Releases」→「Create a new release」
-3. 選擇標籤 `v1.3.0`
-4. 填寫發布說明（從 `CHANGELOG.md` 複製）
-5. 標記為最新發布
-6. 點擊「Publish Release」
+### 5. Create GitHub Release
 
-### 步驟 9：清理
-```bash
-# 刪除發布分支
-git branch -d release-1.3.0
-git push origin --delete release-1.3.0
-```
-
----
-
-## 緊急發布流程
-
-遇到嚴重錯誤需要緊急發布時：
-
-### 步驟 1：建立熱修復分支
-```bash
-git checkout main
-git checkout -b hotfix-1.2.1
-```
-
-### 步驟 2：修復問題
-- 只修復緊急問題
-- 避免加入新功能
-- 最小化變更範圍
-
-### 步驟 3：快速測試
-- 執行相關測試
-- 驗證問題已修復
-- 確認無新問題引入
-
-### 步驟 4：發布
-```bash
-git add .
-git commit -m "fix: 緊急修復 [問題描述]"
-git push origin hotfix-1.2.1
-
-# 建立 PR 並標記為緊急
-# 合併立即可執行
-```
-
----
-
-## 版本命名規範
-
-遵循 [語意化版本 2.0.0](https://semver.org/)：
-
-格式：`MAJOR.MINOR.PATCH`
-
-- **MAJOR**：不相容的 API 變更
-  - 移除或修改現有功能
-  - 改變預設行為導致不相容
-  
-- **MINOR**：向後相容的功能新增
-  - 新增功能
-  - 改進現有功能（向後相容）
-  
-- **PATCH**：向後相容的問題修正
-  - 錯誤修復
-  - 效能優化
-  - 文檔更新
-
-### 範例
-- `1.2.3` - 第 1 版第 2 次次要更新的第 3 次修補
-- `2.0.0` - 第 2 版主版本（可能包含不相容變更）
-- `1.3.0` - 第 1 版第 3 次次要更新
-
----
-
-## 發布說明範本
+1. Go to [GitHub Releases](https://github.com/KeithKeepGoing/evoclaw/releases)
+2. Click "Draft a new release"
+3. Select the tag `v1.10.1`
+4. Use the following template:
 
 ```markdown
-## [版本號] - YYYY-MM-DD
+## 🎉 What's New
 
-### 新增
-- 功能描述
+### 🐛 Bug Fixes
+- Fixed critical bug in Telegram channel where binary files would fail to send
 
-### 改進
-- 改進描述
+### 📝 Documentation
+- Updated CHANGELOG.md with new format
+- Added RELEASE.md for release process
 
-### 修復
-- 修復描述
-
-### 安全性
-- 安全性相關更新
-
-### 已知問題
-- 已知問題描述
-```
-
----
-
-## 發布後任務
-
-### 立即可做
-- [ ] 確認 GitHub Release 已正確建立
-- [ ] 檢查 CI/CD 流水線是否成功
-- [ ] 通知用戶群體（如有需要）
-
-### 24 小時內
-- [ ] 監控錯誤回報
-- [ ] 收集用戶反饋
-- [ ] 確認無重大問題
-
-### 一週內
-- [ ] 整理發布反饋
-- [ ] 規劃下一版本
-- [ ] 更新開發路線圖
-
----
-
-## 聯絡方式
-
-如有發布相關問題，請：
-1. 查閱本文件
-2. 檢查 GitHub Issues
-3. 聯繫維護者
-
----
-
-## 附錄：常用命令
+## 📦 Installation
 
 ```bash
-# 查看當前版本
-git describe --tags --always
-
-# 查看版本歷史
-git log --oneline --decorate
-
-# 比較版本差異
-git diff v1.2.0..v1.3.0
-
-# 建立新版本標籤
-git tag -a v1.3.0 -m "Release version 1.3.0"
-
-# 推送標籤
-git push origin v1.3.0
-
-# 刪除標籤（本地）
-git tag -d v1.3.0
-
-# 刪除標籤（遠端）
-git push origin --delete v1.3.0
+git clone https://github.com/KeithKeepGoing/evoclaw.git
+cd evoclaw
+git checkout v1.10.1
+python setup/setup.py
 ```
+
+## 🔗 Links
+- [Full Changelog](https://github.com/KeithKeepGoing/evoclaw/blob/main/CHANGELOG.md)
+- [Documentation](https://github.com/KeithKeepGoing/evoclaw#readme)
+```
+
+5. Click "Publish release"
+
+### 6. Notify Users
+
+- Post in project discussions/announcements
+- Update any relevant community channels
+
+## Version Numbering
+
+EvoClaw follows [Semantic Versioning](https://semver.org/):
+
+- **MAJOR.MINOR.PATCH** (e.g., 1.10.1)
+- **MAJOR**: Incompatible API changes
+- **MINOR**: Backwards-compatible functionality additions
+- **PATCH**: Backwards-compatible bug fixes
+
+### Examples
+
+- `1.10.0` → `1.10.1`: Bug fix patch
+- `1.10.1` → `1.11.0`: New feature (minor)
+- `1.11.0` → `2.0.0`: Breaking change (major)
+
+## Hotfix Process
+
+For critical bugs requiring immediate fix:
+
+1. Create hotfix branch from tag: `git checkout -b hotfix/v1.10.1-fix v1.10.1`
+2. Apply fix and commit
+3. Update version to `1.10.2`
+4. Follow release steps above
+5. Merge hotfix back to main
+
+## Release Notes Template
+
+```markdown
+## [VERSION] - YYYY-MM-DD
+
+### Added
+- New features here
+
+### Changed
+- Changes to existing functionality
+
+### Deprecated
+- Soon-to-be removed features
+
+### Removed
+- Removed features
+
+### Fixed
+- Bug fixes
+
+### Security
+- Security improvements
+```
+
+## Verification
+
+After release, verify:
+
+- [ ] Tag is visible on GitHub
+- [ ] Release notes are correct
+- [ ] Installation from tag works
+- [ ] All features function as expected
+- [ ] Documentation is accessible
+
+---
+
+**Last Updated:** 2026-03-11 (v1.10.1)

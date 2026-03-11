@@ -109,21 +109,36 @@ class TelegramChannel:
         if not self._app:
             return
         import pathlib
+        import mimetypes
         p = pathlib.Path(file_path)
         if not p.exists():
             await self.send_message(jid, f"⚠️ File not found: {p.name}")
             return
         chat_id = int(jid.replace("tg:", ""))
         try:
+            # Read file as binary to avoid encoding issues (e.g., cp950 errors)
             with open(p, "rb") as f:
-                await self._app.bot.send_document(
-                    chat_id=chat_id,
-                    document=f,
-                    filename=p.name,
-                    caption=caption or f"📎 {p.name}",
-                )
+                file_data = f.read()
+            
+            # Determine MIME type (fallback to application/octet-stream)
+            mime_type, _ = mimetypes.guess_type(str(p))
+            if mime_type is None:
+                mime_type = "application/octet-stream"
+            
+            # Send file using InputFile to ensure binary data is handled correctly
+            from telegram import InputFile
+            input_file = InputFile(file_data, filename=p.name)
+            
+            await self._app.bot.send_document(
+                chat_id=chat_id,
+                document=input_file,
+                filename=p.name,
+                caption=caption or f"📎 {p.name}",
+                disable_content_type_detection=True,  # Prevents Telegram from re-encoding
+            )
         except Exception as exc:
             # Fallback: notify user
+            log.error(f"Failed to send file '{p.name}': {exc}")
             await self.send_message(jid, f"⚠️ Failed to send file '{p.name}': {exc}")
 
     async def send_typing(self, jid: str) -> None:

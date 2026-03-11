@@ -13,7 +13,7 @@
 以 Python 打造的 AI 助理框架，支援 Gemini、OpenAI 相容 API 及 Claude。
 內建**進化引擎**，讓助手隨著使用自動學習與改進。
 
-**v1.10.0** — 完整基因組演化 + 可靠性 + 安全強化：_stop_container 等待 proc.wait()、/api/env 鍵白名單、asyncio.Lock 替換 threading.Lock、formality/technical_depth 三維基因組演化、排程器透過 GroupQueue 序列化、WebPortal 1 小時 session 過期、.env 遮蔽 macOS 相容性修復、DevEngine JID 回退清晰錯誤訊息。
+**v1.10.1** — **修復 Telegram 檔案發送 Bug**：解決二進位檔案（.pptx、.pdf 等）發送時的 `cp950` 編碼錯誤，改用 `InputFile` 並明確指定 MIME type，確保檔案完整傳輸。**v1.10.0** — 完整基因組演化 + 可靠性 + 安全強化：_stop_container 等待 proc.wait()、/api/env 鍵白名單、asyncio.Lock 替換 threading.Lock、formality/technical_depth 三維基因組演化、排程器透過 GroupQueue 序列化、WebPortal 1 小時 session 過期、.env 遮蔽 macOS 相容性修復、DevEngine JID 回退清晰錯誤訊息。
 
 ---
 
