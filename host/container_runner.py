@@ -332,6 +332,7 @@ async def run_container_agent(
             async def _stream_stderr() -> None:
                 """逐行讀取 stderr 並更新 current_activity + log_buffer。"""
                 assert proc.stderr is not None
+                _EMOJI_TAGS = ("🚀","📥","💬","🤖","🧠","🔧","📨","📎","📤","❌","🏁","⚠️")
                 while True:
                     line_bytes = await proc.stderr.readline()
                     if not line_bytes:
@@ -339,7 +340,11 @@ async def run_container_agent(
                     line = line_bytes.decode(errors="replace").rstrip()
                     if line:
                         stderr_lines.append(line)
-                        log.debug("[container:%s] %s", container_name, line)
+                        # Elevate structured agent log lines to INFO
+                        if any(e in line for e in _EMOJI_TAGS):
+                            log.info("[%s] %s", container_name, line)
+                        else:
+                            log.debug("[%s] %s", container_name, line)
                         async with _active_lock:
                             if container_name in _active_containers:
                                 _active_containers[container_name]["current_activity"] = line

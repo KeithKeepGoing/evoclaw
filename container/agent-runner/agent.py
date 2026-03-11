@@ -16,7 +16,15 @@ import glob as _glob_module
 import urllib.request
 import urllib.error
 import html.parser
+import traceback
+import datetime as _dt
 from pathlib import Path
+
+import logging as _logging
+_logging.getLogger("httpx").setLevel(_logging.WARNING)
+_logging.getLogger("httpcore").setLevel(_logging.WARNING)
+_logging.getLogger("google").setLevel(_logging.WARNING)
+_logging.getLogger("urllib3").setLevel(_logging.WARNING)
 try:
     from google import genai
     from google.genai import types
@@ -53,9 +61,10 @@ WORKSPACE = "/workspace/group"
 _input_chat_jid: str = ""
 
 
-def _log(msg: str) -> None:
-    """Write a progress message to stderr (visible in Docker Desktop logs)."""
-    print(f"[evoclaw] {msg}", file=sys.stderr, flush=True)
+def _log(tag: str, msg: str = "") -> None:
+    """Structured stderr logging with millisecond timestamps."""
+    ts = _dt.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    print(f"[{ts}] {tag} {msg}", file=sys.stderr, flush=True)
 
 
 # ── Tool implementations ──────────────────────────────────────────────────────
@@ -140,6 +149,7 @@ def tool_send_message(chat_jid: str, text: str, sender: str = None) -> str:
         if sender:
             payload["sender"] = sender  # 可選的發送者名稱（顯示為不同的 bot 身份）
         fname.write_text(json.dumps(payload), encoding="utf-8")
+        _log("📨 IPC", f"type=message → {fname.name}")
         return "Message sent"
     except Exception as e:
         return f"Error: {e}"
@@ -163,6 +173,7 @@ def tool_schedule_task(prompt: str, schedule_type: str, schedule_value: str, con
             "context_mode": context_mode,      # "group" 或 "isolated"
             "chatJid": chat_jid,              # 群組 JID，讓 ipc_watcher 存入 DB 供排程器路由使用
         }), encoding="utf-8")
+        _log("📨 IPC", f"type=schedule_task → {fname.name}")
         return "Task scheduled"
     except Exception as e:
         return f"Error: {e}"
@@ -295,6 +306,8 @@ def tool_send_file(chat_jid: str = "", file_path: str = "", caption: str = "") -
     Path(IPC_MESSAGES_DIR).mkdir(parents=True, exist_ok=True)
     msg_file = Path(IPC_MESSAGES_DIR) / f"file_{int(time.time()*1000)}_{os.getpid()}.json"
     msg_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    _log("📎 FILE", f"path={file_path} exists={os.path.exists(file_path)}")
+    _log("📨 IPC", f"type=send_file → {msg_file.name}")
     return f"✅ File queued: {os.path.basename(file_path)}"
 
 
@@ -648,7 +661,8 @@ def run_agent_claude(client, model: str, system_instruction: str, user_message: 
     MAX_ITER = 30
     final_response = ""
 
-    for _ in range(MAX_ITER):
+    for n in range(MAX_ITER):
+        _log("🧠 LLM →", f"turn={n} provider=claude")
         response = client.messages.create(
             model=model,
             max_tokens=4096,
@@ -656,6 +670,7 @@ def run_agent_claude(client, model: str, system_instruction: str, user_message: 
             tools=CLAUDE_TOOL_DECLARATIONS,
             messages=messages,
         )
+        _log("🧠 LLM ←", f"stop={response.stop_reason}")
 
         # Add assistant response to history
         messages.append({"role": "assistant", "content": response.content})
@@ -695,7 +710,13 @@ def execute_tool(name: str, args: dict, chat_jid: str) -> str:
     根據 Gemini 回傳的 function call 名稱，分派到對應的 tool 實作。
     chat_jid 傳給需要知道發送目標的工具（如 send_message）。
     """
-    _log(f"Tool: {name}({', '.join(f'{k}={str(v)[:40]}' for k, v in args.items())})")
+    _log("🔧 TOOL", f"{name} args={str(args)[:200]}")
+    result = _execute_tool_inner(name, args, chat_jid)
+    _log("🔧 RESULT", str(result)[:200])
+    return result
+
+
+def _execute_tool_inner(name: str, args: dict, chat_jid: str) -> str:
     if name == "Bash":
         return tool_bash(args["command"])
     elif name == "Read":
@@ -755,7 +776,8 @@ def run_agent_openai(client, system_instruction: str, user_message: str, chat_ji
     MAX_ITER = 30
     final_response = ""
 
-    for _ in range(MAX_ITER):
+    for n in range(MAX_ITER):
+        _log("🧠 LLM →", f"turn={n} provider=openai-compat")
         response = client.chat.completions.create(
             model=model,
             messages=history,
@@ -765,6 +787,8 @@ def run_agent_openai(client, system_instruction: str, user_message: str, chat_ji
             max_tokens=4096,
         )
         msg = response.choices[0].message
+        stop_reason = response.choices[0].finish_reason
+        _log("🧠 LLM ←", f"stop={stop_reason}")
 
         # Add assistant message to history
         msg_dict = {"role": "assistant", "content": msg.content or ""}
@@ -836,7 +860,8 @@ def run_agent(client: genai.Client, system_instruction: str, user_message: str, 
     MAX_ITER = 30  # 最多迭代次數，防止無限迴圈
     final_response = ""
 
-    for _ in range(MAX_ITER):
+    for n in range(MAX_ITER):
+        _log("🧠 LLM →", f"turn={n} provider=gemini")
         response = client.models.generate_content(
             model=os.environ.get("GEMINI_MODEL", "gemini-2.0-flash"),
             contents=history,
@@ -848,6 +873,8 @@ def run_agent(client: genai.Client, system_instruction: str, user_message: str, 
         )
 
         candidate = response.candidates[0] if response.candidates else None
+        stop_reason = str(candidate.finish_reason) if candidate else "none"
+        _log("🧠 LLM ←", f"stop={stop_reason}")
         if not candidate or not candidate.content or not candidate.content.parts:
             break  # Gemini 沒有回傳任何內容，提前結束
 
@@ -889,7 +916,10 @@ def emit(obj: dict):
     host 的 container_runner 會從這兩個標記之間截取 JSON。
     使用 flush=True 確保輸出立即寫入，不被 Python 的緩衝區滯留。
     """
-    _log(f"Done | status={obj.get('status','?')}")
+    result_text = obj.get("result") or ""
+    _log("📤 OUTPUT", f"{len(result_text)} chars")
+    success = obj.get("status") == "success"
+    _log("🏁 DONE", f"success={success}")
     print(OUTPUT_START, flush=True)
     print(json.dumps(obj), flush=True)
     print(OUTPUT_END, flush=True)
@@ -911,15 +941,16 @@ def main():
     先設定基本角色與工作環境資訊，再讀取 CLAUDE.md 設定檔（若存在），
     讓每個群組可以有自訂的 agent 行為設定。
     """
+    _log("🚀 START", f"pid={os.getpid()}")
     # Read stdin via buffer to handle BOM (Windows Docker pipe may prepend \xef\xbb\xbf)
     raw = sys.stdin.buffer.read().decode("utf-8-sig").strip()
-    _log("Input received, parsing...")
     try:
         inp = json.loads(raw)
-    except Exception:
+    except Exception as e:
+        _log("❌ ERROR", f"{type(e).__name__}: {e}")
+        traceback.print_exc(file=sys.stderr)
         emit({"status": "error", "result": None, "error": "Invalid JSON input"})
         return
-    _log("JSON parsed OK")
 
     # 將解析後的輸入資料存到全域變數，讓工具函式（如 tool_list_tasks）可以存取
     global _input_data, _input_chat_jid
@@ -937,6 +968,11 @@ def main():
     assistant_name = inp.get("assistantName", "") or "Eve"
     conversation_history = inp.get("conversationHistory", [])
 
+    messages = inp.get("conversationHistory", [])
+    _log("📥 INPUT", f"jid={chat_jid} group={group_folder} msgs={len(messages)}")
+    last_msg = {"role": "user", "content": prompt}
+    _log("💬 MSG", str(last_msg)[:120])
+
     # 將 API 金鑰等敏感資料從 stdin JSON 設定到環境變數
     # 這樣 Gemini SDK 等依賴 os.environ 的函式庫就能自動取得
     for k, v in secrets.items():
@@ -953,7 +989,6 @@ def main():
     use_claude = bool(claude_api_key and not use_openai_compat)
 
     backend = "claude" if use_claude else ("openai-compat" if use_openai_compat else "gemini")
-    _log(f"Starting | group={group_folder} | backend={backend}")
 
     if use_openai_compat and not _OPENAI_AVAILABLE:
         emit({"status": "error", "result": None, "error": "openai package not installed in container. Rebuild with updated requirements.txt."})
@@ -1027,15 +1062,18 @@ def main():
 
     system_instruction = "\n".join(lines)
 
-    _log("Calling LLM API...")
     try:
         if use_openai_compat:
             _model = os.environ.get("NIM_MODEL") or os.environ.get("OPENAI_MODEL") or os.environ.get("GEMINI_MODEL") or "meta/llama-3.3-70b-instruct"
+            _log("🤖 MODEL", f"openai-compat/{_model}")
             result = run_agent_openai(openai_client, system_instruction, prompt, chat_jid, _model, conversation_history)
         elif use_claude:
+            _log("🤖 MODEL", f"claude/{claude_model}")
             claude_client = anthropic.Anthropic(api_key=claude_api_key)
             result = run_agent_claude(claude_client, claude_model, system_instruction, prompt, chat_jid, conversation_history)
         else:
+            _gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+            _log("🤖 MODEL", f"gemini/{_gemini_model}")
             result = run_agent(client, system_instruction, prompt, chat_jid, assistant_name, conversation_history)
         # 若 agent 已透過 mcp__evoclaw__send_message 工具主動發送訊息，
         # 則清空 result 欄位，避免 host 的 container_runner 再次發送（雙重訊息 + 超長訊息 bug）
@@ -1043,6 +1081,8 @@ def main():
         emit_result = "" if _messages_sent_via_tool else result
         emit({"status": "success", "result": emit_result, "newSessionId": f"evoclaw-{int(time.time())}"})
     except Exception as e:
+        _log("❌ ERROR", f"{type(e).__name__}: {e}")
+        traceback.print_exc(file=sys.stderr)
         emit({"status": "error", "result": None, "error": str(e)})
 
 

@@ -5,6 +5,25 @@ All notable changes to EvoClaw will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.5] - 2026-03-11
+
+### Added
+- **Comprehensive Container Agent Logging**: Added `_log(tag, msg)` helper with millisecond timestamps to `container/agent-runner/agent.py` for structured stderr logging throughout the agent lifecycle.
+  - Startup: process ID logged at container boot (`🚀 START`).
+  - Input parsed: JID, group folder, and message count (`📥 INPUT`).
+  - Last message preview for quick debugging (`💬 MSG`).
+  - Model/provider selection before first LLM call (`🤖 MODEL`).
+  - Per-turn LLM call and response with stop reason (`🧠 LLM →/←`).
+  - Tool dispatch with name and truncated args (`🔧 TOOL`).
+  - Tool result preview (`🔧 RESULT`).
+  - IPC file writes for messages, tasks, and files (`📨 IPC`).
+  - File send path and existence check (`📎 FILE`).
+  - Output size in chars before emit (`📤 OUTPUT`).
+  - Exception type and message with full traceback to stderr (`❌ ERROR`).
+  - Completion with success flag (`🏁 DONE`).
+- **Noisy SDK log suppression**: `httpx`, `httpcore`, `google`, and `urllib3` loggers clamped to WARNING level.
+- **Host stderr elevation**: `host/container_runner.py` `_stream_stderr()` now promotes emoji-tagged agent log lines from DEBUG to INFO so they appear in production logs without `--debug`.
+
 ## [1.10.1] - 2026-03-11
 
 ### Fixed
