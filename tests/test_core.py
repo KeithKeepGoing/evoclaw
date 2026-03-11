@@ -76,7 +76,7 @@ class TestDatabase:
         msg_id = str(uuid.uuid4())
         jid = "tg:123"
         fresh_db.store_message(
-            msg_id, jid, sender="bot", sender_name="Andy",
+            msg_id, jid, sender="bot", sender_name="Eve",
             content="Bot reply", timestamp=2_000_000_000_000,
             is_from_me=True, is_bot_message=True,
         )
@@ -108,7 +108,7 @@ class TestDatabase:
             jid="tg:9999",
             name="Test Group",
             folder="telegram_test",
-            trigger_pattern="@Andy",
+            trigger_pattern="@Eve",
             container_config=None,
             requires_trigger=True,
             is_main=False,

@@ -48,7 +48,7 @@ def main():
     if not env_path.exists():
         api_key = input("Enter your Google Gemini API key: ").strip()
         tg_token = input("Enter your Telegram bot token (or press Enter to skip): ").strip()
-        name = input("Assistant name (default: Andy): ").strip() or "Andy"
+        name = input("Assistant name (default: Eve): ").strip() or "Eve"
         env_content = f"GOOGLE_API_KEY={api_key}\n"
         if tg_token:
             env_content += f"TELEGRAM_BOT_TOKEN={tg_token}\n"

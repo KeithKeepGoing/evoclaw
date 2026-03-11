@@ -42,4 +42,4 @@ python run.py
 ```
 
 ### 5. Test
-Send `@Andy hello` in your Telegram group — the bot should respond.
+Send `@Eve hello` in your Telegram group — the bot should respond.

@@ -1,5 +1,21 @@
 # Release Notes
 
+## v1.10.1 — File Delivery System + Rename Eve (2026-03-11)
+
+This release adds a complete Docker-to-Telegram file delivery pipeline and renames the default assistant from Andy to Eve.
+
+### File Delivery System
+
+Container agents can now send files (PDFs, PowerPoint, images, etc.) directly to Telegram users. The agent writes the file to `/workspace/group/output/`, then calls `mcp__evoclaw__send_file` with the container path. The IPC watcher resolves the container path to the host filesystem via `_resolve_container_path()` and routes the file through `TelegramChannel.send_file()`, which uses `bot.send_document()`. If the file is not found or sending fails, the user receives a text notification as fallback.
+
+Path resolution supports four container mount points: `/workspace/group/` → `groups/{folder}/`, `/workspace/project/` → project root, `/workspace/ipc/` → `data/ipc/{folder}/`, and `/workspace/global/` → `groups/global/`.
+
+### Rename: Andy → Eve
+
+The default assistant name has been updated from Andy to Eve across all configuration files, documentation, source code, and container defaults. Users who have set `ASSISTANT_NAME` in their `.env` are unaffected.
+
+---
+
 ## v1.10.0 — Full Genome Evolution + Reliability + Security Hardening (2026-03-11)
 
 This release closes 8 remaining architecture issues identified in deep review: zombie subprocesses, an environment variable injection vector, threading/async lock misuse, incomplete genome evolution, scheduler serialization bypass, unbounded session memory, a macOS Docker incompatibility, and a confusing DevEngine error path.

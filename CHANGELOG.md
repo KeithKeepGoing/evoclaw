@@ -5,6 +5,24 @@
 格式基於 [Keep a Changelog](https://keepachangelog.com/)，
 版本號遵循 [語意化版本](https://semver.org/)。
 
+## [1.10.1] - 2026-03-11
+
+### Added
+- File delivery system: new `send_file` IPC message type allows container agents to deliver files to Telegram users
+- TelegramChannel.send_file(): sends documents via bot.send_document() with fallback to text on error
+- router.route_file(): routes file delivery to the appropriate channel
+- _resolve_container_path(): converts /workspace/group/ paths to host filesystem paths
+- tool_send_file(): new agent tool in container/agent-runner/agent.py for file delivery
+- groups/global/CLAUDE.md: documentation for file delivery workflow
+
+### Changed
+- Default assistant name changed from Andy to Eve across all config, docs, and code
+- ASSISTANT_NAME default updated in config.py, setup.py, .env.example, container agent
+- groups/main/CLAUDE.md: updated name and trigger from Andy/@Andy to Eve/@Eve
+- All README and documentation files updated (Andy → Eve)
+
+---
+
 ## [1.10.0] - 2026-03-11
 
 ### Fixed

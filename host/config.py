@@ -33,7 +33,7 @@ def _env_int(key: str, default: int) -> int:
 
 
 # Assistant
-ASSISTANT_NAME = os.environ.get("ASSISTANT_NAME", "Andy")
+ASSISTANT_NAME = os.environ.get("ASSISTANT_NAME", "Eve")
 TRIGGER_PATTERN = re.compile(rf"^@{re.escape(ASSISTANT_NAME)}\b", re.IGNORECASE)
 
 # Polling

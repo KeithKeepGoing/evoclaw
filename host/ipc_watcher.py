@@ -3,6 +3,7 @@ import asyncio
 import importlib
 import json
 import logging
+import os
 import sys as _sys
 import pathlib as _pathlib
 import time
@@ -12,6 +13,7 @@ from typing import Callable, Awaitable
 
 from . import config, db
 from .group_folder import is_valid_group_folder
+from .router import route_file
 import asyncio as _asyncio
 
 log = logging.getLogger(__name__)
@@ -125,6 +127,7 @@ async def _handle_ipc(payload: dict, group_folder: str, is_main: bool, route_fn:
     - "apply_skill"：安裝 Skill Plugin（僅主群組可用）
     - "uninstall_skill"：移除 Skill Plugin（僅主群組可用）
     - "list_skills"：列出已安裝的 Skills（任何群組均可查詢）
+    - "send_file"：將容器內的檔案傳送給用戶（透過 Telegram 等頻道的 send_document）
     """
     msg_type = payload.get("type")
 
@@ -279,6 +282,27 @@ async def _handle_ipc(payload: dict, group_folder: str, is_main: bool, route_fn:
                 _dev_group_jid,
                 route_fn,
             ))
+
+    elif msg_type == "send_file":
+        container_path = payload.get("filePath", "")
+        caption = payload.get("caption", "")
+        # Resolve chatJid: use payload value, or fall back to group's registered JID
+        _sf_jid = payload.get("chatJid", "")
+        if not _sf_jid:
+            _sf_groups = db.get_all_registered_groups()
+            _sf_match = next((g for g in _sf_groups if g.get("folder") == group_folder), None)
+            _sf_jid = _sf_match["jid"] if _sf_match else ""
+
+        # Resolve container path to host path
+        # Container sees /workspace/group/ → host sees {GROUPS_DIR}/{folder}/
+        host_path = _resolve_container_path(container_path, group_folder)
+
+        if host_path and os.path.exists(host_path):
+            _asyncio.ensure_future(route_file(_sf_jid, host_path, caption))
+        else:
+            log.warning("send_file IPC: file not found at host path '%s' (container: '%s')",
+                        host_path, container_path)
+            _asyncio.ensure_future(route_fn(_sf_jid, f"⚠️ File not found: {os.path.basename(container_path)}"))
 
 async def _run_dev_task(payload: dict, group_jid: str, route_fn) -> None:
     """
@@ -522,6 +546,37 @@ async def _run_subagent(
             )
         except Exception:
             pass
+
+
+def _resolve_container_path(container_path: str, group_folder: str) -> str | None:
+    """Convert a container-side file path to the equivalent host path.
+
+    Container /workspace/group/  → host {GROUPS_DIR}/{folder}/
+    Container /workspace/project/ → host {BASE_DIR}/
+    Container /workspace/ipc/    → host {DATA_DIR}/ipc/{folder}/
+    """
+    import pathlib
+    p = container_path.replace("\\", "/")
+
+    groups_dir = str(config.GROUPS_DIR).rstrip("/")
+    base_dir = str(config.BASE_DIR).rstrip("/")
+    data_dir = str(config.DATA_DIR).rstrip("/")
+
+    if p.startswith("/workspace/group/"):
+        rel = p[len("/workspace/group/"):]
+        return str(pathlib.Path(groups_dir) / group_folder / rel)
+    elif p.startswith("/workspace/project/"):
+        rel = p[len("/workspace/project/"):]
+        return str(pathlib.Path(base_dir) / rel)
+    elif p.startswith("/workspace/ipc/"):
+        rel = p[len("/workspace/ipc/"):]
+        return str(pathlib.Path(data_dir) / "ipc" / group_folder / rel)
+    elif p.startswith("/workspace/global/"):
+        rel = p[len("/workspace/global/"):]
+        return str(pathlib.Path(groups_dir) / "global" / rel)
+    else:
+        # Absolute path or unknown — return as-is
+        return container_path if pathlib.Path(container_path).is_absolute() else None
 
 
 def _require_own_or_main(group_folder: str, target_folder: str, is_main: bool) -> None:

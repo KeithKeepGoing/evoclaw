@@ -88,3 +88,12 @@ async def route_outbound(jid: str, text: str) -> None:
         except Exception as e:
             log.error(f"Failed to send message to {jid}: {e}")
             break
+
+
+async def route_file(jid: str, file_path: str, caption: str = "") -> None:
+    """Route a file to the appropriate channel for delivery."""
+    ch = find_channel(jid)
+    if ch is None:
+        log.warning("route_file: no channel for jid=%s", jid)
+        return
+    await ch.send_file(jid, file_path, caption)

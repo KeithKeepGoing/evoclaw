@@ -55,12 +55,12 @@ EvoClaw 是一個演化式 AI 代理系統，包含以下核心模組：
 **前提條件**：
 - 非主群組（`is_main=False`）
 - `requires_trigger=True`（預設值）
-- 觸發關鍵字設為 `@Andy`
+- 觸發關鍵字設為 `@Eve`
 
 **測試步驟**：
 1. 訊息 A：`"天氣如何"` （無觸發詞）
-2. 訊息 B：`"@Andy 天氣如何"` （含觸發詞）
-3. 訊息 C：`"Hi @Andy!"` （含觸發詞但位置不同）
+2. 訊息 B：`"@Eve 天氣如何"` （含觸發詞）
+3. 訊息 C：`"Hi @Eve!"` （含觸發詞但位置不同）
 
 **驗證方式**：
 - 訊息 A：不被處理（`_process_group_messages()` 過濾掉）
@@ -643,7 +643,7 @@ EvoClaw 是一個演化式 AI 代理系統，包含以下核心模組：
 **測試名稱**：Full Workflow: User Input → Agent → Scheduled Task
 
 **測試步驟**：
-1. 用戶傳送：`"@Andy 每天早上 9 點提醒我喝水"`
+1. 用戶傳送：`"@Eve 每天早上 9 點提醒我喝水"`
 2. Agent 理解並呼叫 `mcp__evoclaw__schedule_task`：
    ```json
    {

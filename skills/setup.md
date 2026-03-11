@@ -28,7 +28,7 @@ Edit `.env`:
 ```
 GOOGLE_API_KEY=your_gemini_api_key
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token  # get from @BotFather
-ASSISTANT_NAME=Andy   # change to your preferred name
+ASSISTANT_NAME=Eve   # change to your preferred name
 ```
 
 ### 4. Install Python dependencies

@@ -8,6 +8,10 @@ class Channel(Protocol):
     def is_connected(self) -> bool: ...
     def owns_jid(self, jid: str) -> bool: ...
     async def disconnect(self) -> None: ...
+    async def send_file(self, jid: str, file_path: str, caption: str = "") -> None:
+        """Send a file/document to the chat. Override in channel implementations."""
+        # Default: send the file path as text (fallback for channels without file support)
+        await self.send_message(jid, f"📎 File: {file_path}\n{caption}".strip())
 
 _registry: dict[str, type] = {}
 

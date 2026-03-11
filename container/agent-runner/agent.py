@@ -259,6 +259,25 @@ def tool_run_agent(prompt: str, context_mode: str = "isolated") -> str:
         return f"Error spawning subagent: {e}"
 
 
+def tool_send_file(chat_jid: str, file_path: str, caption: str = "") -> str:
+    """Send a file to a chat. file_path must be an absolute path inside the container
+    (e.g., /workspace/group/output/report.pptx). The file must have been written
+    to /workspace/group/ first so it maps to the host filesystem."""
+    if not file_path:
+        return "Error: file_path is required"
+
+    payload = {
+        "type": "send_file",
+        "chatJid": chat_jid,
+        "filePath": file_path,
+        "caption": caption,
+    }
+    msg_file = Path(IPC_MESSAGES_DIR) / f"file_{int(time.time()*1000)}_{os.getpid()}.json"
+    Path(IPC_MESSAGES_DIR).mkdir(parents=True, exist_ok=True)
+    msg_file.write_text(json.dumps(payload, ensure_ascii=False))
+    return f"File queued for delivery: {os.path.basename(file_path)}"
+
+
 def tool_glob(pattern: str, path: str = WORKSPACE) -> str:
     """
     在指定目錄下尋找符合 glob 模式的檔案（支援 ** 遞迴搜尋）。
@@ -525,6 +544,19 @@ TOOL_DECLARATIONS = [
             required=["prompt"],
         ),
     ),
+    types.FunctionDeclaration(
+        name="mcp__evoclaw__send_file",
+        description="Send a file to the user. Write the file to /workspace/group/output/ first, then call this tool with the absolute container path.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "chat_jid": types.Schema(type=types.Type.STRING, description="The chat JID to send the file to"),
+                "file_path": types.Schema(type=types.Type.STRING, description="Absolute container path to the file, e.g. /workspace/group/output/report.pptx"),
+                "caption": types.Schema(type=types.Type.STRING, description="Optional caption for the file"),
+            },
+            required=["chat_jid", "file_path"],
+        ),
+    ),
 ]
 
 
@@ -546,6 +578,7 @@ OPENAI_TOOL_DECLARATIONS = [
     {"type": "function", "function": {"name": "Grep", "description": "Search file contents with regex. Returns filename:line:content.", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}, "include": {"type": "string"}}, "required": ["pattern"]}}},
     {"type": "function", "function": {"name": "WebFetch", "description": "Fetch a URL and return its content as plain text.", "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
     {"type": "function", "function": {"name": "mcp__evoclaw__run_agent", "description": "Spawn a subagent in an isolated Docker container to handle a subtask. Blocks until complete (up to 300s) and returns its output.", "parameters": {"type": "object", "properties": {"prompt": {"type": "string", "description": "The task for the subagent"}, "context_mode": {"type": "string", "description": "isolated or group"}}, "required": ["prompt"]}}},
+    {"type": "function", "function": {"name": "mcp__evoclaw__send_file", "description": "Send a file to the user. Write the file to /workspace/group/output/ first, then call this tool.", "parameters": {"type": "object", "properties": {"chat_jid": {"type": "string", "description": "The chat JID to send the file to"}, "file_path": {"type": "string", "description": "Absolute container path to the file"}, "caption": {"type": "string", "description": "Optional caption"}}, "required": ["chat_jid", "file_path"]}}},
 ]
 
 
@@ -574,6 +607,7 @@ CLAUDE_TOOL_DECLARATIONS = [
     {"name": "Grep", "description": "Search file contents with regex. Returns filename:line:content.", "input_schema": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}, "include": {"type": "string"}}, "required": ["pattern"]}},
     {"name": "WebFetch", "description": "Fetch a URL and return its content as plain text.", "input_schema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
     {"name": "mcp__evoclaw__run_agent", "description": "Spawn a subagent in an isolated Docker container to handle a subtask. Blocks until complete (up to 300s) and returns its output.", "input_schema": {"type": "object", "properties": {"prompt": {"type": "string", "description": "The task for the subagent"}, "context_mode": {"type": "string", "description": "isolated or group"}}, "required": ["prompt"]}},
+    {"name": "mcp__evoclaw__send_file", "description": "Send a file to the user. Write the file to /workspace/group/output/ first, then call this tool.", "input_schema": {"type": "object", "properties": {"chat_jid": {"type": "string", "description": "The chat JID to send the file to"}, "file_path": {"type": "string", "description": "Absolute container path to the file"}, "caption": {"type": "string", "description": "Optional caption"}}, "required": ["chat_jid", "file_path"]}},
 ]
 
 
@@ -675,6 +709,8 @@ def execute_tool(name: str, args: dict, chat_jid: str) -> str:
         return tool_web_fetch(args["url"])
     elif name == "mcp__evoclaw__run_agent":
         return tool_run_agent(args["prompt"], args.get("context_mode", "isolated"))
+    elif name == "mcp__evoclaw__send_file":
+        return tool_send_file(args.get("chat_jid", chat_jid), args["file_path"], args.get("caption", ""))
     return f"Unknown tool: {name}"
 
 
@@ -740,7 +776,7 @@ def run_agent_openai(client, system_instruction: str, user_message: str, chat_ji
 
 
 
-def run_agent(client: genai.Client, system_instruction: str, user_message: str, chat_jid: str, assistant_name: str = "Andy", conversation_history: list = None) -> str:
+def run_agent(client: genai.Client, system_instruction: str, user_message: str, chat_jid: str, assistant_name: str = "Eve", conversation_history: list = None) -> str:
     """
     Gemini function-calling 代理迴圈（agentic loop）。
 
@@ -762,7 +798,7 @@ def run_agent(client: genai.Client, system_instruction: str, user_message: str, 
     """
     # Few-shot: only teach identity response for direct "who are you" questions.
     # Avoid adding examples too similar to real user queries — that causes the model
-    # to apply the identity template to all questions (the "always says Andy" bug).
+    # to apply the identity template to all questions (the "always says Eve" bug).
     identity_response = f"我是 {assistant_name}，你的個人 AI 助理！有什麼需要幫忙的嗎？"
     history = [
         types.Content(role="user", parts=[types.Part(text="你是誰？你是什麼AI？你是Google的嗎？")]),
@@ -876,7 +912,7 @@ def main():
     # 演化引擎注入的動態行為提示（表觀遺傳：環境感知 + 群組基因組風格）
     # 若為空字串則不添加任何附加指引
     evolution_hints = inp.get("evolutionHints", "")
-    assistant_name = inp.get("assistantName", "") or "Andy"
+    assistant_name = inp.get("assistantName", "") or "Eve"
     conversation_history = inp.get("conversationHistory", [])
 
     # 將 API 金鑰等敏感資料從 stdin JSON 設定到環境變數

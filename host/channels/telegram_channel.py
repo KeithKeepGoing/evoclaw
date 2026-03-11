@@ -104,6 +104,28 @@ class TelegramChannel:
         chat_id = int(jid.replace("tg:", ""))
         await self._app.bot.send_message(chat_id=chat_id, text=text)
 
+    async def send_file(self, jid: str, file_path: str, caption: str = "") -> None:
+        """Send a document/file to a Telegram chat."""
+        if not self._app:
+            return
+        import pathlib
+        p = pathlib.Path(file_path)
+        if not p.exists():
+            await self.send_message(jid, f"⚠️ File not found: {p.name}")
+            return
+        chat_id = int(jid.replace("tg:", ""))
+        try:
+            with open(p, "rb") as f:
+                await self._app.bot.send_document(
+                    chat_id=chat_id,
+                    document=f,
+                    filename=p.name,
+                    caption=caption or f"📎 {p.name}",
+                )
+        except Exception as exc:
+            # Fallback: notify user
+            await self.send_message(jid, f"⚠️ Failed to send file '{p.name}': {exc}")
+
     async def send_typing(self, jid: str) -> None:
         if not self._app:
             return

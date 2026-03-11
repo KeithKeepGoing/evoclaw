@@ -122,14 +122,14 @@ python run.py
 
 ## Usage
 
-Talk to your assistant using the trigger word (default: `@Andy`):
+Talk to your assistant using the trigger word (default: `@Eve`):
 
 ```
-@Andy summarize the sales pipeline every weekday morning at 9am
-@Andy review the git history every Friday and update the README if there's drift
-@Andy every Monday at 8am, compile AI news from Hacker News and message me a briefing
-@Andy what files changed in the last 3 commits?
-@Andy spin up a team of agents to research and write a market analysis report
+@Eve summarize the sales pipeline every weekday morning at 9am
+@Eve review the git history every Friday and update the README if there's drift
+@Eve every Monday at 8am, compile AI news from Hacker News and message me a briefing
+@Eve what files changed in the last 3 commits?
+@Eve spin up a team of agents to research and write a market analysis report
 ```
 
 ### Main Channel
@@ -137,10 +137,10 @@ Talk to your assistant using the trigger word (default: `@Andy`):
 Your private self-chat is the **main channel** — your admin console. From here:
 
 ```
-@Andy list all scheduled tasks across all groups
-@Andy pause the Monday briefing task
-@Andy register the "team-chat" group with jid dc:1234567890:9876543210
-@Andy what's in the recent error logs?
+@Eve list all scheduled tasks across all groups
+@Eve pause the Monday briefing task
+@Eve register the "team-chat" group with jid dc:1234567890:9876543210
+@Eve what's in the recent error logs?
 ```
 
 Every other group is fully isolated from the main channel and from each other.
