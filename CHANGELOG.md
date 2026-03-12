@@ -5,6 +5,19 @@ All notable changes to EvoClaw will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.20] - 2026-03-12
+
+### Changed
+- 升級 container Docker 基礎鏡像至 python:3.9 (Debian Bullseye)
+- 預裝中文字體：fonts-wqy-zenhei、fonts-wqy-microhei + fc-cache
+- 預裝系統依賴：libfreetype6、libpng16-16、zlib1g
+- 預裝 python-pptx==1.0.2 進鏡像，消除 runtime pip 網路依賴
+- 設定 PYTHONUNBUFFERED=1 + LANG=C.UTF-8 確保輸出編碼正確
+
+### Fixed
+- research_ppt 工具在網路不穩定時因 pip install 失敗而崩潰的問題
+- 中文字元在 PPT/PDF 中顯示為方塊的問題
+
 ## [1.10.19] - 2026-03-12
 
 ### Fixed
