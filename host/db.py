@@ -588,33 +588,38 @@ def record_immune_threat(sender_jid: str, pattern_hash: str, threat_type: str) -
     避免重複記錄膨脹資料庫。
 
     回傳累計次數供呼叫方判斷是否需要自動封鎖。
+
+    NOTE: _db_lock is held for the full read-modify-write sequence to prevent
+    a TOCTOU race condition between the SELECT and the UPDATE/INSERT under
+    concurrent access from dashboard/webportal threads.
     """
-    db = get_db()
-    existing = db.execute("""
-        SELECT id, count FROM immune_threats
-        WHERE sender_jid = ? AND pattern_hash = ?
-    """, (sender_jid, pattern_hash)).fetchone()
+    with _db_lock:
+        db = get_db()
+        existing = db.execute("""
+            SELECT id, count FROM immune_threats
+            WHERE sender_jid = ? AND pattern_hash = ?
+        """, (sender_jid, pattern_hash)).fetchone()
 
-    if existing:
-        new_count = existing["count"] + 1
-        db.execute("""
-            UPDATE immune_threats SET count = ?, last_seen = datetime('now')
-            WHERE id = ?
-        """, (new_count, existing["id"]))
-    else:
-        db.execute("""
-            INSERT INTO immune_threats (sender_jid, pattern_hash, threat_type)
-            VALUES (?, ?, ?)
-        """, (sender_jid, pattern_hash, threat_type))
-        new_count = 1
+        if existing:
+            new_count = existing["count"] + 1
+            db.execute("""
+                UPDATE immune_threats SET count = ?, last_seen = datetime('now')
+                WHERE id = ?
+            """, (new_count, existing["id"]))
+        else:
+            db.execute("""
+                INSERT INTO immune_threats (sender_jid, pattern_hash, threat_type)
+                VALUES (?, ?, ?)
+            """, (sender_jid, pattern_hash, threat_type))
+            new_count = 1
 
-    db.commit()
+        db.commit()
 
-    # 回傳此發送者的所有威脅記錄總數（跨不同 pattern）
-    total = db.execute("""
-        SELECT SUM(count) as total FROM immune_threats WHERE sender_jid = ?
-    """, (sender_jid,)).fetchone()
-    return total["total"] if total else new_count
+        # 回傳此發送者的所有威脅記錄總數（跨不同 pattern）
+        total = db.execute("""
+            SELECT SUM(count) as total FROM immune_threats WHERE sender_jid = ?
+        """, (sender_jid,)).fetchone()
+        return total["total"] if total else new_count
 
 
 def is_sender_blocked(sender_jid: str) -> bool:
@@ -757,12 +762,54 @@ def get_dev_events(jid: str = None, limit: int = 100, stage: str = None) -> list
 
 # ── Maintenance ────────────────────────────────────────────────────────────────
 
+def get_pending_task_count() -> int:
+    """Return the number of active scheduled tasks (status='active') that are overdue.
+
+    Used by health_monitor to gauge scheduler backlog.
+    """
+    db = get_db()
+    now_ms = int(time.time() * 1000)
+    row = db.execute(
+        "SELECT COUNT(*) as cnt FROM scheduled_tasks WHERE status='active' AND next_run IS NOT NULL AND next_run <= ?",
+        (now_ms,),
+    ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def get_error_stats(minutes: int = 5) -> dict:
+    """Return success/error counts from evolution_runs for the last `minutes` minutes.
+
+    Used by health_monitor to calculate recent error rate.
+    Returns dict with keys: total, errors, successes.
+    """
+    db = get_db()
+    row = db.execute(
+        """
+        SELECT
+            COUNT(*) as total,
+            SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as errors,
+            SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successes
+        FROM evolution_runs
+        WHERE timestamp > datetime('now', ? || ' minutes')
+        """,
+        (f"-{minutes}",),
+    ).fetchone()
+    if row and row["total"]:
+        return {"total": row["total"], "errors": row["errors"] or 0, "successes": row["successes"] or 0}
+    return {"total": 0, "errors": 0, "successes": 0}
+
+
 def prune_old_logs(days: int = 30) -> None:
     """Delete old rows from append-only log tables to prevent unbounded disk growth.
 
     Prunes:
     - task_run_logs: rows older than `days` days (keyed by run_at in ms)
     - evolution_runs: rows older than `days` days (keyed by timestamp TEXT)
+    - evolution_log: rows older than `days` days (keyed by timestamp TEXT)
+    - messages: rows older than `days` days (keyed by timestamp ms integer)
+    - immune_threats: rows older than 90 days that have count=1 (noise, not recurring)
+    - dev_events: rows older than `days` days (keyed by timestamp TEXT)
+    - dev_sessions: rows older than `days` days (keyed by created_at REAL seconds)
 
     Safe to call at startup or from a periodic maintenance loop.
     On a deployment with 5 groups and per-minute tasks, 30 days retention keeps
@@ -778,8 +825,35 @@ def prune_old_logs(days: int = 30) -> None:
             "DELETE FROM evolution_runs WHERE timestamp < datetime('now', ?)",
             (f"-{days} days",),
         )
+        # evolution_log: same TEXT timestamp format
+        db.execute(
+            "DELETE FROM evolution_log WHERE timestamp < datetime('now', ?)",
+            (f"-{days} days",),
+        )
+        # messages: timestamp is ms epoch integer (same cutoff as task_run_logs)
+        db.execute("DELETE FROM messages WHERE timestamp < ?", (cutoff_ms,))
+        # immune_threats: keep blocked senders and recurring threats indefinitely;
+        # prune one-shot noise entries (count=1) older than 90 days
+        immune_cutoff_ms = int((time.time() - 90 * 86400) * 1000)
+        db.execute(
+            "DELETE FROM immune_threats WHERE count = 1 AND blocked = 0 "
+            "AND last_seen < datetime('now', '-90 days')",
+        )
+        # dev_events: TEXT timestamp
+        db.execute(
+            "DELETE FROM dev_events WHERE timestamp < datetime('now', ?)",
+            (f"-{days} days",),
+        )
+        # dev_sessions: created_at is stored as REAL (Unix seconds)
+        cutoff_secs = time.time() - days * 86400
+        db.execute("DELETE FROM dev_sessions WHERE created_at < ?", (cutoff_secs,))
         db.commit()
-    log.info("Pruned logs older than %d days (task_run_logs + evolution_runs)", days)
+    log.info(
+        "Pruned logs older than %d days "
+        "(task_run_logs, evolution_runs, evolution_log, messages, dev_events, dev_sessions) "
+        "+ immune_threats noise > 90d",
+        days,
+    )
 
 
 # ── Shutdown cleanup ───────────────────────────────────────────────────────────

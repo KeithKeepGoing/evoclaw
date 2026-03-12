@@ -5,6 +5,18 @@ All notable changes to EvoClaw will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.14] - 2026-03-12
+
+### Fixed
+- `db.record_immune_threat()` now holds `_db_lock` for the full read-modify-write sequence, eliminating a TOCTOU race condition under concurrent dashboard/webportal thread access (Issue #32)
+- `db.prune_old_logs()` now also prunes `evolution_log`, `messages`, `immune_threats` (noise-only), `dev_events`, and `dev_sessions` tables — previously only `task_run_logs` and `evolution_runs` were cleaned, leaving five tables to grow unboundedly (Issue #33)
+- Added `psutil>=5.9.0` to `host/requirements.txt` and `pyproject.toml`; `health_monitor.py` imports `psutil` unconditionally but it was not listed as a dependency, causing `ImportError` on fresh installs (Issue #34)
+- Implemented `db.get_pending_task_count()` and `db.get_error_stats()` in `db.py`; health monitor was guarding calls with `hasattr()` and silently using zero-value fallbacks, making the container-queue and error-rate health checks permanently non-functional (Issue #35)
+- LLM API calls (Gemini, Claude, OpenAI-compatible) now wrapped in `_llm_call_with_retry()` with exponential backoff (up to 3 attempts: 1s, 2s delay) for transient errors (429 rate limit, 5xx server errors); permanent errors (400, 401) are not retried (Issue #36)
+
+### Added
+- Periodic DB log pruning: `evolution_loop` in `daemon.py` now calls `prune_old_logs()` after each 24-hour evolution cycle, ensuring long-running processes benefit from maintenance without requiring a restart (Issue #37)
+
 ## [1.10.13] - 2026-03-12
 
 ### Security

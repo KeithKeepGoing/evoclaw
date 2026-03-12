@@ -152,7 +152,29 @@ After release, verify:
 
 ---
 
-**Last Updated:** 2026-03-12 (v1.10.13)
+**Last Updated:** 2026-03-12 (v1.10.14)
+
+---
+
+## v1.10.14 Release Notes
+
+### Fourth Round Reliability and Edge Case Improvements
+
+**Bug Fixes**:
+
+1. *DB race condition in immune system* (Issue #32): `record_immune_threat()` was performing a read-modify-write without holding `_db_lock`, creating a TOCTOU race with dashboard/webportal threads. Fixed by wrapping the full sequence in `with _db_lock:`.
+
+2. *Five tables growing without bound* (Issue #33): `prune_old_logs()` only cleaned `task_run_logs` and `evolution_runs`. Added pruning for `evolution_log`, `messages`, `immune_threats` (noise entries), `dev_events`, and `dev_sessions` using configurable retention windows.
+
+3. *psutil missing from requirements* (Issue #34): `health_monitor.py` imported `psutil` unconditionally but it was absent from `host/requirements.txt` and `pyproject.toml`, causing `ImportError` on fresh installs. Added `psutil>=5.9.0` to both files.
+
+4. *Health monitor permanently disabled* (Issue #35): `_check_container_queue()` and `_check_error_rate()` called `db.get_pending_task_count()` and `db.get_error_stats()` which did not exist in `db.py`. The `hasattr()` guards silently fell back to zero values, making both checks no-ops. Implemented both functions in `db.py`.
+
+5. *No LLM API retry on transient errors* (Issue #36): All three LLM provider loops (Gemini, Claude, OpenAI-compatible) called the API with no retry logic. A single 429 or 5xx response failed the entire container run. Added `_llm_call_with_retry()` with exponential backoff (3 attempts, 1s/2s delays).
+
+**Added**:
+
+6. *Periodic log pruning* (Issue #37): `prune_old_logs()` was called only at startup. Long-running processes accumulated rows between restarts. The evolution daemon now calls `prune_old_logs()` after each 24-hour cycle.
 
 ---
 
