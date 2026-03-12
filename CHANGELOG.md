@@ -5,6 +5,22 @@ All notable changes to EvoClaw will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.24] - 2026-03-12
+
+### Fixed
+- **#92** dev_engine.py Stage 7: replace string `startswith()` path traversal guard with `Path.relative_to()` — eliminates false-pass for paths like `/base_evil/file`
+- **#90** webportal.py: move `_pending_replies[msg_id] = session_id` inside `_sessions_lock` to eliminate race condition between concurrent `/api/send` requests
+
+### Closed (already fixed in prior versions)
+- **#95** Docker: CJK fonts and PPT/PDF libs (libfreetype6, zlib1g, fonts-wqy-zenhei) already in v1.10.21 Dockerfile
+- **#96** CONTAINER_IMAGE env var already configurable since v1.10.22
+- **#97** RELEASE.md already added in v1.10.22
+- **#98** CHANGELOG.md already added in v1.10.22
+- **#99** Duplicate of #95
+
+### Chore
+- Version bump 1.10.23 → 1.10.24
+
 ## [1.10.23] - 2026-03-12
 
 ### Fixed

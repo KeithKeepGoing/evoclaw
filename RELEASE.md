@@ -152,7 +152,28 @@ After release, verify:
 
 ---
 
-**Last Updated:** 2026-03-12 (v1.10.23)
+**Last Updated:** 2026-03-12 (v1.10.24)
+
+---
+
+## v1.10.24 Release Notes
+
+### Path Traversal Fix and WebPortal Race Condition Fix
+
+**Problems Fixed**:
+
+1. *dev_engine.py Stage 7 string prefix path traversal* (#92): `_write_one_file()` used `str(target).startswith(str(base))` to guard against path traversal. This check is semantically incorrect — a base of `/foo/bar` would incorrectly pass a target of `/foo/bar_evil/file` because the string starts with `/foo/bar`. Replaced with `target.relative_to(base)` inside a try/except ValueError block, which enforces the correct semantic: the target must be a true descendant of base.
+
+2. *webportal.py `_pending_replies` race condition* (#90): `_pending_replies[msg_id] = session_id` was written outside `_sessions_lock` while `_cleanup_pending_replies()` reads and modifies the same dict inside the lock. Two concurrent `/api/send` requests could observe stale or partially-updated `_pending_replies` state. The assignment is now inside the `with _sessions_lock:` block that calls `_cleanup_pending_replies()`, ensuring both operations are always atomic.
+
+**Upgrade**:
+
+No `docker build` needed — all changes are in the host process. Restart EvoClaw to apply.
+
+```bash
+git pull
+python run.py start
+```
 
 ---
 
