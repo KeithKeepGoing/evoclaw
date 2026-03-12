@@ -568,3 +568,7 @@ Docker 容器（每群組獨立隔離）
 
 - 每個群組有自己獨立的容器、工作區和記憶（`MEMORY.md`）
 - GroupQueue 確保每群組同時只有一個容器 — 代理忙碌時訊息
+> 
+> *Last updated by Eve Bot on 2026-03-12*
+
+
