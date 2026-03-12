@@ -74,6 +74,46 @@ def _log(tag: str, msg: str = "") -> None:
     print(f"[{ts}] {tag} {msg}", file=sys.stderr, flush=True)
 
 
+def _llm_call_with_retry(fn, max_attempts: int = 3, base_delay: float = 1.0):
+    """Call an LLM API function with exponential backoff retry on transient errors.
+
+    Retries on HTTP 429 (rate limit), 500, 502, 503, 529 (server errors).
+    Permanent errors (400 bad request, 401 unauthorized) are not retried.
+
+    Args:
+        fn: Zero-argument callable that performs the LLM API call.
+        max_attempts: Maximum number of total attempts (default 3).
+        base_delay: Initial delay in seconds; doubles on each retry.
+
+    Returns:
+        The API response from fn().
+
+    Raises:
+        The last exception if all attempts are exhausted.
+    """
+    _RETRYABLE_STATUS = {429, 500, 502, 503, 529}
+    last_exc = None
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            exc_str = str(exc)
+            # Determine if this is a retryable error by inspecting the exception text
+            is_retryable = any(str(code) in exc_str for code in _RETRYABLE_STATUS)
+            is_retryable = is_retryable or any(
+                kw in exc_str.lower()
+                for kw in ("rate limit", "overloaded", "resource exhausted", "too many requests",
+                           "service unavailable", "bad gateway", "timeout")
+            )
+            if not is_retryable or attempt == max_attempts - 1:
+                raise
+            delay = base_delay * (2 ** attempt)
+            _log("⚠️ LLM retry", f"attempt={attempt + 1}/{max_attempts} delay={delay:.1f}s err={exc_str[:80]}")
+            time.sleep(delay)
+    raise last_exc  # unreachable but satisfies type checkers
+
+
 def _check_path_allowed(file_path: str) -> str | None:
     """Return an error string if the resolved path is outside the allowed workspace,
     or None if the path is acceptable.
@@ -790,13 +830,14 @@ def run_agent_claude(client, model: str, system_instruction: str, user_message: 
 
     for n in range(MAX_ITER):
         _log("🧠 LLM →", f"turn={n} provider=claude")
-        response = client.messages.create(
+        _claude_msgs = messages  # capture current snapshot for lambda
+        response = _llm_call_with_retry(lambda: client.messages.create(
             model=model,
             max_tokens=4096,
             system=system_instruction,
             tools=CLAUDE_TOOL_DECLARATIONS,
-            messages=messages,
-        )
+            messages=_claude_msgs,
+        ))
         _log("🧠 LLM ←", f"stop={response.stop_reason}")
 
         # Add assistant response to history
@@ -911,14 +952,15 @@ def run_agent_openai(client, system_instruction: str, user_message: str, chat_ji
 
     for n in range(MAX_ITER):
         _log("🧠 LLM →", f"turn={n} provider=openai-compat")
-        response = client.chat.completions.create(
+        _oai_history = history  # capture current snapshot for lambda
+        response = _llm_call_with_retry(lambda: client.chat.completions.create(
             model=model,
-            messages=history,
+            messages=_oai_history,
             tools=OPENAI_TOOL_DECLARATIONS,
             tool_choice="auto",
             temperature=0.7,
             max_tokens=4096,
-        )
+        ))
         msg = response.choices[0].message
         stop_reason = response.choices[0].finish_reason
         _log("🧠 LLM ←", f"stop={stop_reason}")
@@ -995,15 +1037,16 @@ def run_agent(client: genai.Client, system_instruction: str, user_message: str, 
 
     for n in range(MAX_ITER):
         _log("🧠 LLM →", f"turn={n} provider=gemini")
-        response = client.models.generate_content(
-            model=os.environ.get("GEMINI_MODEL", "gemini-2.0-flash"),
+        _gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+        response = _llm_call_with_retry(lambda: client.models.generate_content(
+            model=_gemini_model,
             contents=history,
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 tools=[types.Tool(function_declarations=TOOL_DECLARATIONS)],
                 temperature=0.7,  # 適中的隨機性，讓回覆自然但不失準確
             ),
-        )
+        ))
 
         candidate = response.candidates[0] if response.candidates else None
         stop_reason = str(candidate.finish_reason) if candidate else "none"

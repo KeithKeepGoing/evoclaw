@@ -65,6 +65,14 @@ async def evolution_loop(stop_event: asyncio.Event) -> None:
             # 演化週期失敗不應中斷 daemon，記錄錯誤後繼續下一個週期
             log.error(f"Evolution cycle failed: {e}", exc_info=True)
 
+        # Periodic DB maintenance: prune old rows from all log tables.
+        # Running here means maintenance happens every 24h without an additional loop,
+        # ensuring long-running processes don't accumulate rows indefinitely.
+        try:
+            await asyncio.to_thread(_sync_prune_logs)
+        except Exception as e:
+            log.warning("Periodic log pruning failed (non-fatal): %s", e)
+
 
 async def _run_cycle() -> None:
     """
@@ -75,6 +83,13 @@ async def _run_cycle() -> None:
     log.info("Evolution cycle starting")
     await asyncio.to_thread(_sync_evolve)
     log.info("Evolution cycle complete")
+
+
+def _sync_prune_logs() -> None:
+    """Run DB log pruning synchronously (called via asyncio.to_thread from evolution_loop)."""
+    from host import db
+    db.prune_old_logs(days=30)
+    log.info("Periodic log pruning completed")
 
 
 def _sync_evolve() -> None:
