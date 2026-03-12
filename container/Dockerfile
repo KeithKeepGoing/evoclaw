@@ -3,7 +3,7 @@
 
 FROM node:22-slim
 
-# Install system dependencies: Python3, Chromium, fonts
+# Install system dependencies: Python3, Chromium, fonts, CJK fonts, PPT/PDF support
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
@@ -12,6 +12,11 @@ RUN apt-get update && apt-get install -y \
     fonts-liberation \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
+    fonts-wqy-zenhei \
+    fonts-wqy-microhei \
+    libfreetype6 \
+    libpng16-16 \
+    zlib1g \
     libgbm1 \
     libnss3 \
     libatk-bridge2.0-0 \
@@ -27,7 +32,8 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     curl \
     git \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && fc-cache -fv
 
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -38,6 +44,10 @@ RUN npm install -g agent-browser
 
 # Set up Python app directory
 WORKDIR /app
+
+# Pre-install python-pptx (eliminates runtime pip install / network dependency)
+RUN pip3 install --break-system-packages --no-cache-dir \
+    python-pptx==1.0.2
 
 # Install Python dependencies
 COPY agent-runner/requirements.txt ./
@@ -60,6 +70,10 @@ USER node
 
 # Set working directory
 WORKDIR /workspace/group
+
+# Environment settings
+ENV PYTHONUNBUFFERED=1
+ENV LANG=C.UTF-8
 
 # Entry point reads JSON from stdin, outputs JSON to stdout
 ENTRYPOINT ["/app/entrypoint.sh"]

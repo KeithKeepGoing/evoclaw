@@ -152,7 +152,35 @@ After release, verify:
 
 ---
 
-**Last Updated:** 2026-03-12 (v1.10.19)
+**Last Updated:** 2026-03-12 (v1.10.20)
+
+---
+
+## v1.10.20 Release Notes
+
+### Docker: Upgrade Container Image with CJK Fonts and Pre-installed python-pptx
+
+**Problems Fixed**:
+
+1. *research_ppt tool fails on network instability* (Issue #75): `python-pptx` was installed at runtime via `pip install` inside the container skill script. A transient PyPI network failure would cause the tool to crash with no output. Moving the install to the Dockerfile eliminates this network dependency entirely — the package is baked into the image.
+
+2. *Chinese characters display as squares in PPT/PDF* (Issue #75): The base image had no CJK (Chinese/Japanese/Korean) font packages. `python-pptx` fell back to a placeholder glyph (square box) for all Chinese characters. Pre-installing `fonts-wqy-zenhei` and `fonts-wqy-microhei` with `fc-cache -fv` ensures correct CJK rendering in generated presentations.
+
+**Changes**:
+
+- Added `fonts-wqy-zenhei`, `fonts-wqy-microhei` to apt install block with `fc-cache -fv` post-install
+- Added `libfreetype6`, `libpng16-16`, `zlib1g` system libraries for PPT/PDF rendering
+- Added pre-install step: `pip3 install --break-system-packages --no-cache-dir python-pptx==1.0.2`
+- Added `ENV PYTHONUNBUFFERED=1` and `ENV LANG=C.UTF-8` for correct output encoding
+
+**Upgrade**:
+
+Rebuild the agent container image to pick up the new fonts and pre-installed package:
+
+```bash
+git pull
+docker build -t evoclaw-agent:1.10.20 container/
+```
 
 ---
 
