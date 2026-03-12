@@ -152,7 +152,25 @@ After release, verify:
 
 ---
 
-**Last Updated:** 2026-03-12 (v1.10.26)
+**Last Updated:** 2026-03-12 (v1.10.27)
+
+---
+
+## v1.10.27 Release Notes
+
+### Memory Safety, Reliability, and Shutdown Fixes (Issues #118–#122)
+
+**Problems Fixed**:
+
+1. *Rate-limit deque unbounded memory growth* (#118): `_group_msg_timestamps` used plain `deque()` per group JID. A group sending messages within the rolling window never triggered timestamp eviction, allowing the deque to grow indefinitely. Fixed by initialising with `maxlen=RATE_LIMIT_MAX_MSGS*2`.
+
+2. *Subagent result files accumulate indefinitely on disk* (#119): IPC result files in `data/ipc/*/results/` were never cleaned up when containers crashed or parent agents cancelled. Fixed by adding `_cleanup_stale_results()` sweep removing files >1h old every 120 poll cycles.
+
+3. *Immune system blocks all messages on transient DB lock* (#120): `check_message()` failed-secure even for brief SQLite busy locks, blacking out entire groups. Fixed by distinguishing transient `database is locked` (fail-open) from permanent I/O errors (fail-secure).
+
+4. *Graceful shutdown hangs for up to POLL_INTERVAL seconds* (#121): Tasks sleeping between poll cycles blocked SIGTERM. Fixed by explicitly cancelling all pending asyncio tasks in the `finally` block.
+
+5. *Invalid cron expression leaves task with `next_run=NULL` silently* (#122): Tasks with broken schedules became invisible to scheduler polls without notification. Fixed by marking `status=paused` with explanatory `last_result`.
 
 ---
 

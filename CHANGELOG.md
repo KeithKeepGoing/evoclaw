@@ -5,6 +5,18 @@ All notable changes to EvoClaw will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.27] - 2026-03-12
+
+### Fixed
+- **#118** `main.py`: `_is_rate_limited()` — initialise per-group deque with `maxlen=RATE_LIMIT_MAX_MSGS*2`; without a cap the deque grew unbounded for groups that consistently send within the rolling window, causing memory bloat and O(n) deque operations after days of operation
+- **#119** `ipc_watcher.py`: added `_cleanup_stale_results()` background sweep — removes subagent result files in `data/ipc/*/results/` that are older than 1 hour; runs every 120 IPC poll cycles to prevent disk fill when containers crash before writing or parent agents are cancelled before reading
+- **#120** `evolution/immune.py`: `check_message()` now distinguishes transient DB locks (`sqlite3.OperationalError: database is locked`) from permanent errors — transient locks fail-open (allow message) to prevent a brief prune_old_logs lock from blacking out all group messages; permanent/IO errors still fail-secure
+- **#121** `main.py`: graceful shutdown now explicitly cancels all pending asyncio tasks before disconnecting channels — tasks sleeping in `asyncio.sleep()` (message loop POLL_INTERVAL, evolution loop) now exit immediately on SIGTERM instead of blocking shutdown for up to POLL_INTERVAL seconds
+- **#122** `task_scheduler.py`: when `compute_next_run()` returns `None` (invalid schedule expression), task is now marked `status=paused` with an explanatory `last_result` message instead of being left with `next_run=NULL`/`status=active`, invisible to scheduler polls but never cleaned up
+
+### Chore
+- Version bump 1.10.26 → 1.10.27
+
 ## [1.10.26] - 2026-03-12
 
 ### Fixed
