@@ -5,6 +5,12 @@ All notable changes to EvoClaw will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.2] — 2026-03-13
+
+### Fixed
+- `main.py`: 關機 `finally` 區塊順序修正 — 先 `channel.disconnect()` 再取消 asyncio tasks，消除 Telegram CRITICAL CancelledError 誤報 (#135)
+- `channels/telegram_channel.py`: `disconnect()` 各步驟獨立 try/except，防止 `CancelledError` 向外傳播
+
 ## [1.11.1] — 2026-03-13
 
 ### Fixed

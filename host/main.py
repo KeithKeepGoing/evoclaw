@@ -648,22 +648,23 @@ async def main() -> None:
             _orphan_cleanup_loop(_stop_event),
         )
     finally:
-        # Fix #121: explicitly cancel all still-running asyncio tasks so loops sleeping in
-        # asyncio.sleep() (e.g. POLL_INTERVAL) exit immediately rather than blocking shutdown.
-        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-
-        # 等待所有進行中的 container 完成（最多 30 秒），避免截斷回覆或損毀 IPC 狀態
-        await _group_queue.wait_for_active(timeout=30.0)
-        # 確保所有頻道在離開時都乾淨地斷線
+        # Fix #135: disconnect channels FIRST so Telegram's update_fetcher_task can stop cleanly
+        # before we bulk-cancel tasks — prevents the misleading CRITICAL CancelledError log.
         for channel in _loaded_channels:
             try:
                 await channel.disconnect()
             except Exception:
                 pass
+
+        # 等待所有進行中的 container 完成（最多 30 秒），避免截斷回覆或損毀 IPC 狀態
+        await _group_queue.wait_for_active(timeout=30.0)
+
+        # Fix #121: cancel any remaining sleeping tasks after channels are safely disconnected.
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     log.info("EvoClaw shut down cleanly.")
 

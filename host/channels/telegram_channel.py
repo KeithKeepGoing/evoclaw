@@ -198,7 +198,20 @@ class TelegramChannel:
             log.debug(f"Typing indicator failed: {e}")
 
     async def disconnect(self) -> None:
-        if self._app:
+        if not self._app:
+            return
+        try:
             await self._app.updater.stop()
+        except Exception:
+            pass
+        try:
             await self._app.stop()
+        except asyncio.CancelledError:
+            pass  # update_fetcher already cancelled — expected during shutdown
+        except Exception:
+            pass
+        try:
             await self._app.shutdown()
+        except Exception:
+            pass
+        self._app = None
