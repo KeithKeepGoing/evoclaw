@@ -53,16 +53,33 @@
 - **多模型支援**：Gemini 2.0 Flash（預設）、OpenAI 相容 API（NVIDIA NIM、Groq 等）、Claude
 - **排程任務** — 支援 cron、間隔、一次性執行
 - **原生多輪對話歷史** — 代理在每次對話中保留近期上下文記憶（完整內容，無截斷；可設定 history_lookback_hours，預設 4 小時，最多 50 則）
-- **每群組記憶**：各群組資料夾內的 `MEMORY.md` 檔案
+- 🧠 **三層記憶系統（OpenClaw MemSearch 架構）**
+  - 🔥 **熱記憶（Hot）** — 每群組 8KB MEMORY.md，每次 container 啟動注入
+  - 🌡️ **暖記憶（Warm）** — 30 天每日日誌，格式 `HH:MM 👤... 🤖...`
+  - ❄️ **冷記憶搜尋（Cold）** — SQLite FTS5 BM25 全文搜尋（70%）+ 30 天時間衰減（30%）
+  - 🔄 **微同步（Micro-sync）** — 每 3 小時壓縮暖記憶到熱記憶
+  - 📦 **週複合（Weekly Compound）** — 每 7 天蒸餾精華 + 清理舊日誌
 - **代理集群（Agent Swarms）** — 組建專業代理團隊，協作處理複雜任務
-- 可用工具：Bash、Read、Write、Edit、Glob、Grep、WebFetch、send_message、schedule_task、list_tasks、pause_task、resume_task、cancel_task、`mcp__evoclaw__run_agent` — 在獨立容器中執行子任務，等待結果後回傳（subagent 功能）
+- 可用工具：Bash、Read、Write、Edit、Glob、Grep、WebFetch、send_message、schedule_task、list_tasks、pause_task、resume_task、cancel_task、`mcp__evoclaw__run_agent`
 - **100% Python** — 無 Node.js、無 TypeScript、無編譯步驟
 - 🧬 **進化引擎** — AI 行為隨使用自動優化（詳見下方）
 - 🛡️ **增強免疫系統** — 22 種 injection pattern 檢測，防禦提示詞注入攻擊
-- 📊 **Web Dashboard** — 6 個分頁完整監控（狀態、日誌、Agent、設定、對話、進化），狀態監控支援 Subagent 親子層級視覺化與即時活動追蹤
+- 🔑 **容器自動 gh 認證** — 啟動時自動 `gh auth login --with-token`，agent 可直接使用 `gh repo create`、`git push`
+- 📊 **Web Dashboard — 10 個分頁完整監控**
+  - 📟 **狀態（Status）** — 即時 Container 佇列、活躍群組、系統健康
+  - 📋 **日誌（Logs）** — 即時日誌串流（SSE）
+  - 🤖 **Agent 管理** — 群組/觸發詞設定，Subagent 親子層級視覺化
+  - ⚙️ **設定（Settings）** — 金鑰、CLAUDE.md 編輯
+  - 💬 **對話（Messages）** — 訊息歷史（可依群組篩選）
+  - 🧬 **進化（Evolution）** — 進化事件、基因組、統計
+  - 🛠️ **DevEngine** — 7 階段 LLM 驅動開發引擎（Analyze → Deploy）
+  - 🧠 **記憶（Memory）** — 熱/暖記憶查看 + FTS5 搜尋
+  - ⚡ **Skills 瀏覽器** — 掃描 `skills/*/manifest.yaml`，顯示已安裝技能清單
+  - 📈 **使用統計** — 訊息量/群組、任務執行摘要、進化統計
+  - 🐳 **Container Logs** — 每次 container 執行的完整 stderr，📋 展開 Modal 查看全文
 - 🏥 **健康監控系統** — 即時追蹤 Container 隊列、錯誤率、記憶體使用量
-- 🛠️ **DevEngine** — 7 階段 LLM 驅動自動化開發引擎（Analyze → Design → Implement → Test → Review → Document → Deploy），支援 auto/interactive 雙模式；Dashboard 內建 Prompt 輸入表單、7 階段動態 Badge 指示器、即時日誌終端機、互動模式確認面板、Toast 通知系統
-- 🔌 **動態容器工具熱插拔（Skills 2.0）** — Skills manifest 支援 `container_tools:` 欄位，安裝的 Python 工具自動掛載至容器 `/app/dynamic_tools/`，不需重建 Docker image
+- 🛠️ **DevEngine** — 7 階段 LLM 驅動自動化開發引擎，支援 auto/interactive 雙模式
+- 🔌 **動態容器工具熱插拔（Skills 2.0）** — Skills manifest 支援 `container_tools:` 欄位，安裝的 Python 工具自動掛載至容器 `/app/dynamic_tools/`
 - 📝 **完整文檔系統** — CHANGELOG.md、RELEASE.md 規範化發布流程
 
 ---
