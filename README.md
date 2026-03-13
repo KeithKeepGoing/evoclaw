@@ -17,11 +17,11 @@
 
 | 版本 | 摘要 |
 |------|------|
-| **v1.11.1** | 修復 `CONTAINER_IMAGE` 預設值改為 `evoclaw-agent:latest`（不再硬編碼版本號造成 Docker pull 失敗）；新增 `Makefile` (#133) |
-| **v1.11.0** | OpenClaw 三層記憶系統：熱記憶（8KB MEMORY.md，每次對話自動注入）、暖記憶（每日日誌 + 3h Micro Sync）、冷記憶（SQLite FTS5 混合搜尋）、Weekly Compound、IPC `memory_search` 命令 |
-| **v1.10.28** | 修復記憶系統：保留 sessionId、歷史窗口 50 則；修復進化系統：週期 1h、MIN_SAMPLES 3、靜默異常 log.error (#128–#129) |
-| **v1.10.27** | rate-limit deque maxlen、IPC result 定期清理、immune DB 鎖 fail-open、shutdown 取消 tasks、無效 cron paused (#118–#122) |
-| **v1.10.26** | daemon prune 300s、路徑 redact、UTF-8 截斷、群組不存在 1h backoff、fail_count 衰減 (#112–#116) |
+| **v1.11.2** | 修復關機時 Telegram CRITICAL CancelledError：`finally` 順序改為先斷開頻道再取消 tasks；`disconnect()` 各步驟獨立 try/except (#135) |
+| **v1.11.1** | `CONTAINER_IMAGE` 預設改 `evoclaw-agent:latest`、新增 `Makefile` (#133) |
+| **v1.11.0** | OpenClaw 三層記憶系統：熱記憶（8KB MEMORY.md）、暖記憶（每日日誌 + Micro Sync）、冷記憶（FTS5 混合搜尋）、Weekly Compound |
+| **v1.10.28** | 修復記憶系統：保留 sessionId、歷史窗口 50 則；修復進化系統：週期 1h、MIN_SAMPLES 3 (#128–#129) |
+| **v1.10.27** | rate-limit deque maxlen、IPC result 清理、immune DB 鎖 fail-open、無效 cron paused (#118–#122) |
 
 ---
 
