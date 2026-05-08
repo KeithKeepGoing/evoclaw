@@ -1,3 +1,15 @@
+## [1.27.28] — 2026-05-08
+
+### Removed
+- **Dead Node.js `ci` job in `.github/workflows/ci.yml`.** Job declared `setup-node@v4` with `cache: npm`, then `npm ci` / `npx tsc --noEmit` / `npx vitest run`. Repo is pure Python — no `package.json`, `package-lock.json`, or `tsconfig.json` exists. Job failed in ~4s on every PR for at least the last 5 PRs (#516, #518, #519, #520, #522/#523), training reviewers to ignore CI. Kept `python-tests` job; renamed workflow `name:` from `CI` to `Python CI` for accuracy. No required status checks reference `ci` in branch protection, so rename is safe. (#524)
+- **`.github/workflows/bump-version.yml`.** Ran `npm version patch` against a non-existent `package.json`. Either silently no-opped via `git diff --cached --quiet && exit 0`, or hard-failed. Nothing in the repo reads a `package.json` version — versioning lives in `docs/CHANGELOG.md` and PR titles. Pure dead code. (#524)
+
+### Technical Details
+- **Modified Files**: `.github/workflows/ci.yml` (removed `ci:` job, renamed workflow)
+- **Removed Files**: `.github/workflows/bump-version.yml`
+- **Image rebuild required**: No (CI-only change)
+- **Breaking Changes**: None. Branch protection inspected via `gh api ...branches/main/protection` — no required status checks reference the old `ci` name.
+
 ## [1.27.27] — 2026-05-08
 
 ### Added
