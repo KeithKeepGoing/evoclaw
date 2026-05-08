@@ -1286,18 +1286,49 @@ async function loadUsage() {
 // ── 🐳 Container Logs ──────────────────────────────────────────────────────
 let _clJid = '', _clStatus = '';
 const _clFullLogs = new Map();  // id → full stderr text
+let _clLiveStream = null;  // active EventSource for live container log
 
-function showContainerLog(id) {
-  // Try numeric and string keys to handle type coercion edge cases
-  const numId = (typeof id === 'number') ? id : parseInt(id, 10);
-  const text = _clFullLogs.get(numId) ?? _clFullLogs.get(id) ?? _clFullLogs.get(String(id)) ?? '(log not found — it may have been cleared by auto-refresh; click again)';
+function showContainerLog(id, containerName, status) {
+  // Tear down any previous live stream first.
+  if (_clLiveStream) { try { _clLiveStream.close(); } catch (e) {} _clLiveStream = null; }
+
   const bodyEl = document.getElementById('cl-modal-body');
-  if (bodyEl) bodyEl.textContent = (text !== undefined && text !== null) ? String(text) : '(empty)';
   const modalEl = document.getElementById('cl-modal');
   if (modalEl) modalEl.style.display = 'flex';
+
+  // Issue #567: live SSE stream of `docker logs -f` for currently-running
+  // containers.  Falls back to static DB snapshot if the container is gone.
+  if (status === 'running' && containerName) {
+    if (bodyEl) bodyEl.textContent = '⏳ connecting to docker logs -f ' + containerName + '…\n';
+    try {
+      _clLiveStream = new EventSource('/api/container-logs/stream?name=' + encodeURIComponent(containerName));
+      _clLiveStream.onmessage = (ev) => {
+        try {
+          const obj = JSON.parse(ev.data);
+          if (bodyEl && obj.line !== undefined) {
+            bodyEl.textContent += obj.line + '\n';
+            bodyEl.scrollTop = bodyEl.scrollHeight;
+          }
+        } catch (e) {}
+      };
+      _clLiveStream.onerror = () => {
+        if (_clLiveStream) { try { _clLiveStream.close(); } catch (e) {} _clLiveStream = null; }
+        if (bodyEl) bodyEl.textContent += '\n[stream closed — container may have exited]';
+      };
+      return;
+    } catch (e) {
+      // fall through to static snapshot
+    }
+  }
+
+  // Static snapshot path (finished containers or fallback).
+  const numId = (typeof id === 'number') ? id : parseInt(id, 10);
+  const text = _clFullLogs.get(numId) ?? _clFullLogs.get(id) ?? _clFullLogs.get(String(id)) ?? '(log not found — it may have been cleared by auto-refresh; click again)';
+  if (bodyEl) bodyEl.textContent = (text !== undefined && text !== null) ? String(text) : '(empty)';
 }
 
 function hideContainerLog() {
+  if (_clLiveStream) { try { _clLiveStream.close(); } catch (e) {} _clLiveStream = null; }
   document.getElementById('cl-modal').style.display = 'none';
 }
 
@@ -1366,7 +1397,7 @@ async function loadContainerLogs() {
         <td><span style="color:${stColor};font-weight:bold">${r.status}</span></td>
         <td style="color:#a78bfa">${dur}</td>
         <td style="font-size:10px;max-width:340px;white-space:pre-wrap;word-break:break-all;color:#9ca3af;font-family:monospace">${esc(preview)}</td>
-        <td>${hasLog ? `<button onclick="showContainerLog(${r.id})" style="background:#4c1d95;color:#e9d5ff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px">📋 展開</button>` : ''}</td>
+        <td>${(hasLog || r.status==='running') ? `<button onclick="showContainerLog(${r.id}, '${esc(r.container_name||'')}', '${esc(r.status||'')}')" style="background:${r.status==='running'?'#059669':'#4c1d95'};color:#e9d5ff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px">${r.status==='running'?'🔴 LIVE':'📋 展開'}</button>` : ''}</td>
       </tr>`;
     }
     html += '</tbody></table></div>';
@@ -1788,6 +1819,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/logs/stream":
             self._handle_sse_logs(qs.get("level", "ALL"))
 
+        elif path == "/api/container-logs/stream":
+            # Issue #567: SSE stream of `docker logs -f <name>` so dashboard
+            # can show live container stderr without waiting for finish.
+            self._handle_sse_container_logs(qs.get("name", ""))
+
         elif path == "/api/dev/sessions":
             try:
                 from .dev_engine import list_sessions
@@ -2148,6 +2184,78 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 _dashboard_stopping.wait(timeout=0.5)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass  # client disconnected
+
+    def _handle_sse_container_logs(self, name: str):
+        """Stream `docker logs -f <name>` lines as SSE (#567).
+
+        Spawns a docker logs subprocess for the named container and forwards
+        each stdout/stderr line as an SSE `data:` event. Exits when:
+          * client disconnects (BrokenPipeError)
+          * docker logs subprocess exits (container ended)
+          * dashboard is shutting down
+
+        Security: container name is validated against the evoclaw- prefix +
+        a strict charset to prevent shell injection or arbitrary container
+        access.
+        """
+        import re as _re_cl
+        # Container names from container_runner have the shape
+        # `evoclaw-<channel>-<id>-<uuid8>` — letters, digits, underscores, dashes only.
+        if not name or not _re_cl.fullmatch(r"evoclaw-[A-Za-z0-9_\-]+", name):
+            self.send_response(400)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"invalid container name")
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        # Spawn docker logs --follow.  --tail=200 gives backfill so the user
+        # immediately sees recent context, not just future lines.
+        _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            proc = subprocess.Popen(
+                ["docker", "logs", "-f", "--tail", "200", name],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # merge stderr into stdout for line-by-line
+                bufsize=1,
+                text=True,
+                creationflags=_NO_WINDOW,
+            )
+        except Exception as exc:
+            try:
+                self.wfile.write(f"data: {{\"error\": \"docker logs failed: {exc}\"}}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
+
+        try:
+            assert proc.stdout is not None
+            while not _dashboard_stopping.is_set():
+                line = proc.stdout.readline()
+                if not line:
+                    # subprocess exited (container removed or done)
+                    break
+                # Strip trailing newline; SSE frame adds its own.  Encode each
+                # line as a JSON string to avoid SSE-format issues with embedded
+                # newlines (already stripped, but defensive).
+                payload = json.dumps({"line": line.rstrip("\r\n")}, ensure_ascii=False)
+                try:
+                    self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    break  # client disconnected
+        finally:
+            try:
+                proc.kill()
+                proc.wait(timeout=2)
+            except Exception:
+                pass
 
     def _handle_metrics(self):
         # BUG-DB-03 (HIGH): Table names were interpolated directly into SQL

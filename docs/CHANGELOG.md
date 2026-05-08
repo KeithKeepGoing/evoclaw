@@ -1,3 +1,13 @@
+## [1.27.21] — 2026-05-08
+
+### Added
+- **Dashboard: live container log streaming via SSE.** Dashboard previously only showed `stderr` after `log_container_finish` ran — for a 5-minute container, dashboard sat blank for 5 minutes. New `/api/container-logs/stream?name=<container>` endpoint spawns `docker logs -f --tail=200 <name>` and forwards each line as an SSE `data:` event. Frontend `showContainerLog()` opens an EventSource for containers with `status='running'` and appends lines to the modal body live; finished containers fall back to the static DB snapshot. Container-name input strictly validated (`evoclaw-[A-Za-z0-9_\-]+`) to prevent shell injection. (#567)
+
+### Technical Details
+- **Modified Files**: `host/dashboard.py` (new `_handle_sse_container_logs` method + route + frontend JS for EventSource)
+- **Image rebuild required**: No (host-side change only)
+- **Breaking Changes**: None.
+
 ## [1.27.20] — 2026-05-07
 
 ### Fixed
