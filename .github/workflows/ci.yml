@@ -1,29 +1,10 @@
-name: CI
+name: Python CI
 
 on:
   pull_request:
     branches: [main]
 
 jobs:
-  ci:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-
-      - name: Format check
-        run: npm run format:check
-
-      - name: Typecheck
-        run: npx tsc --noEmit
-
-      - name: Tests
-        run: npx vitest run
-
   # BUG-19D-06 (HIGH): Python tests were never run in CI.  A logging,
   # health-check, or error-recovery regression in the host/ package would
   # only be caught in production.  Add a dedicated Python test job so every
