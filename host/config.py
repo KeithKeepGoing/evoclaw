@@ -258,6 +258,8 @@ _env_file_autoupdate = read_env_file([
     "AUTO_UPDATE_INTERVAL_SECS",
     "AUTO_UPDATE_BRANCH",
     "AUTO_UPDATE_TEST_CMD",
+    "AUTO_UPDATE_USE_WORKTREE",
+    "AUTO_UPDATE_WORKTREE_DIR",
 ])
 AUTO_UPDATE_ENABLED: bool = (
     os.environ.get("AUTO_UPDATE_ENABLED")
@@ -285,6 +287,20 @@ AUTO_UPDATE_BRANCH: str = (
 AUTO_UPDATE_TEST_CMD: str = (
     os.environ.get("AUTO_UPDATE_TEST_CMD")
     or _env_file_autoupdate.get("AUTO_UPDATE_TEST_CMD", "pytest -x --timeout=60 -q tests/")
+)
+# Issue #569: when true, _run_self_update tests in a `git worktree` sandbox
+# (FETCH_HEAD checked out at AUTO_UPDATE_WORKTREE_DIR) before fast-forwarding
+# main.  Test failures leave the main repo untouched.  Defaults to true to
+# replace the pre-#569 `git pull` + `git reset --hard` race-prone path.
+# Set to "false" to opt back into the legacy in-place pull-and-rollback flow.
+AUTO_UPDATE_USE_WORKTREE: bool = (
+    os.environ.get("AUTO_UPDATE_USE_WORKTREE")
+    or _env_file_autoupdate.get("AUTO_UPDATE_USE_WORKTREE", "true")
+).lower() == "true"
+AUTO_UPDATE_WORKTREE_DIR: str = (
+    os.environ.get("AUTO_UPDATE_WORKTREE_DIR")
+    or _env_file_autoupdate.get("AUTO_UPDATE_WORKTREE_DIR", "")
+    or str(DATA_DIR / "auto_update_worktree")
 )
 
 # Multi-instance Leader Election

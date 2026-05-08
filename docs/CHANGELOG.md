@@ -1,3 +1,18 @@
+## [1.27.22] — 2026-05-08
+
+### Added
+- **Self-update tests in `git worktree` sandbox before merging to main.** Previously `_run_self_update` did `git pull` on main repo then `pytest`, with `git reset --hard ORIG_HEAD` on failure — a race window where the main repo sat in pulled-but-broken state during the test run. New worktree path: `git fetch origin <branch>` → `git worktree add <dir> FETCH_HEAD` → `pytest` inside worktree → on pass `git merge --ff-only` to main + write `self_update.flag` → on fail leave worktree (for #570 AI auto-patch) or remove. Main repo is **never modified** until tests pass. Default on (`AUTO_UPDATE_USE_WORKTREE=true`); legacy in-place flow kept as fallback. (#569)
+
+### Technical Details
+- **New Files**: none (refactored `host/ipc_watcher.py:_run_self_update`)
+- **Modified Files**: `host/config.py` (new env knobs), `host/ipc_watcher.py` (split into `_run_self_update_worktree` and `_run_self_update_inplace`)
+- **New Env Vars**:
+  - `AUTO_UPDATE_USE_WORKTREE` (default `true`)
+  - `AUTO_UPDATE_WORKTREE_DIR` (default `<DATA_DIR>/auto_update_worktree`)
+- **Image rebuild required**: No (host-side change only)
+- **Breaking Changes**: None. Set `AUTO_UPDATE_USE_WORKTREE=false` to revert to legacy.
+- **Follow-up**: #570 will reuse the leftover worktree on test failure to attempt AI auto-patch.
+
 ## [1.27.21] — 2026-05-08
 
 ### Added
