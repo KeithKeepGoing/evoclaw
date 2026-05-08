@@ -1021,8 +1021,286 @@ async def _run_start_remote_control(jid: str, sender: str, route_fn: Callable) -
 
 
 async def _run_self_update(jid: str, route_fn: Callable) -> None:
-    """Run git pull + pip install on the host, then write self_update.flag so
-    main._message_loop() can call os.execv() for an in-place restart."""
+    """Self-update entry point.
+
+    Issue #569: dispatches to the worktree-sandbox flow by default
+    (`AUTO_UPDATE_USE_WORKTREE=true`).  Falls back to the legacy in-place
+    pull-and-rollback path when the env opts out.
+    """
+    if getattr(config, "AUTO_UPDATE_USE_WORKTREE", True):
+        await _run_self_update_worktree(jid, route_fn)
+        return
+    await _run_self_update_inplace(jid, route_fn)
+
+
+async def _run_self_update_worktree(jid: str, route_fn: Callable) -> None:
+    """Self-update via git worktree sandbox (Issue #569).
+
+    Flow:
+      1. `git fetch origin <branch>` in main repo (no merge)
+      2. `git worktree add <worktree_dir> FETCH_HEAD` (isolated checkout)
+      3. Run pytest inside the worktree
+      4. pass → `git merge --ff-only FETCH_HEAD` in main, write flag, restart
+      5. fail → `git worktree remove --force` (or leave for #570 AI patch),
+         main repo never touched
+
+    Test failures cannot leave main in a broken state.  Re-running tests
+    in a separate path also lets the host keep serving traffic during the
+    long pytest run.
+    """
+    main_cwd = str(config.BASE_DIR)
+    branch = getattr(config, "AUTO_UPDATE_BRANCH", "main") or "main"
+    worktree_dir = getattr(config, "AUTO_UPDATE_WORKTREE_DIR",
+                           str(config.DATA_DIR / "auto_update_worktree"))
+    try:
+        if jid:
+            await route_fn(jid, f"🔄 EvoClaw 更新中：fetch origin/{branch}...")
+
+        # Always prune dead worktree records first; harmless if none exist.
+        try:
+            _prune = await asyncio.create_subprocess_exec(
+                "git", "worktree", "prune",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                cwd=main_cwd,
+                creationflags=_NO_WINDOW,
+            )
+            await asyncio.wait_for(_prune.wait(), timeout=10.0)
+        except Exception:
+            pass
+
+        # If a previous run left a worktree behind, remove it so `worktree add`
+        # doesn't fail with "already exists".  Use --force in case it has
+        # uncommitted changes from a failed AI patch attempt.
+        if _pathlib.Path(worktree_dir).exists():
+            _rm = await asyncio.create_subprocess_exec(
+                "git", "worktree", "remove", "--force", worktree_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=main_cwd,
+                creationflags=_NO_WINDOW,
+            )
+            try:
+                await asyncio.wait_for(_rm.communicate(), timeout=20.0)
+            except asyncio.TimeoutError:
+                try:
+                    _rm.kill()
+                except Exception:
+                    pass
+
+        # ── git fetch ────────────────────────────────────────────────────────
+        fetch_proc = await asyncio.create_subprocess_exec(
+            "git", "fetch", "origin", branch,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=main_cwd,
+            creationflags=_NO_WINDOW,
+        )
+        try:
+            f_out, _ = await asyncio.wait_for(fetch_proc.communicate(), timeout=60.0)
+        except asyncio.TimeoutError:
+            try:
+                fetch_proc.kill()
+            except Exception:
+                pass
+            if jid:
+                await route_fn(jid, "⏱️ git fetch 逾時 (>60s)，取消更新。")
+            log.error("self_update[worktree]: git fetch timed out")
+            return
+        if fetch_proc.returncode != 0:
+            _msg = f_out.decode("utf-8", errors="replace").strip()[:500]
+            if jid:
+                await route_fn(jid, f"❌ git fetch 失敗 (exit {fetch_proc.returncode})：\n```\n{_msg}\n```")
+            log.error("self_update[worktree]: git fetch rc=%d: %s", fetch_proc.returncode, _msg)
+            return
+
+        # Are we already at FETCH_HEAD?  If so, no test needed.
+        _cmp = await asyncio.create_subprocess_exec(
+            "git", "rev-list", "--count", "HEAD..FETCH_HEAD",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=main_cwd,
+            creationflags=_NO_WINDOW,
+        )
+        _cmp_out, _ = await _cmp.communicate()
+        try:
+            _ahead = int(_cmp_out.decode().strip() or "0")
+        except ValueError:
+            _ahead = 0
+        if _ahead == 0:
+            log.info("self_update[worktree]: already at origin/%s — nothing to do", branch)
+            if jid:
+                await route_fn(jid, f"✅ 已是最新版本（origin/{branch}）。")
+            return
+
+        # ── git worktree add <dir> FETCH_HEAD ─────────────────────────────────
+        wt_add = await asyncio.create_subprocess_exec(
+            "git", "worktree", "add", "--detach", worktree_dir, "FETCH_HEAD",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=main_cwd,
+            creationflags=_NO_WINDOW,
+        )
+        try:
+            wt_out, _ = await asyncio.wait_for(wt_add.communicate(), timeout=60.0)
+        except asyncio.TimeoutError:
+            try:
+                wt_add.kill()
+            except Exception:
+                pass
+            if jid:
+                await route_fn(jid, "⏱️ git worktree add 逾時，取消更新。")
+            log.error("self_update[worktree]: worktree add timed out")
+            return
+        if wt_add.returncode != 0:
+            _msg = wt_out.decode("utf-8", errors="replace").strip()[:500]
+            if jid:
+                await route_fn(jid, f"❌ git worktree add 失敗 (exit {wt_add.returncode})：\n```\n{_msg}\n```")
+            log.error("self_update[worktree]: worktree add rc=%d: %s", wt_add.returncode, _msg)
+            return
+
+        # ── Run tests inside worktree ────────────────────────────────────────
+        _test_cmd_raw = os.environ.get(
+            "AUTO_UPDATE_TEST_CMD",
+            getattr(config, "AUTO_UPDATE_TEST_CMD", "pytest -x --timeout=60 -q tests/"),
+        )
+        if not _test_cmd_raw.strip():
+            log.warning("self_update[worktree]: AUTO_UPDATE_TEST_CMD empty — skipping tests (NOT recommended)")
+            test_rc = 0
+            test_output = "(test gate disabled)"
+        else:
+            if jid:
+                await route_fn(jid, f"🧪 在 worktree 沙盒執行測試: {_test_cmd_raw}")
+            log.info("self_update[worktree]: running tests in %s: %s", worktree_dir, _test_cmd_raw)
+            import shlex as _shlex
+            _test_argv = _shlex.split(_test_cmd_raw)
+            test_proc = await asyncio.create_subprocess_exec(
+                *_test_argv,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=worktree_dir,  # ← key difference: tests run in worktree
+                creationflags=_NO_WINDOW,
+            )
+            try:
+                test_stdout, _ = await asyncio.wait_for(test_proc.communicate(), timeout=600.0)
+                test_rc = test_proc.returncode
+            except asyncio.TimeoutError:
+                try:
+                    test_proc.kill()
+                except Exception:
+                    pass
+                test_stdout = b"(test gate timed out after 600s)"
+                test_rc = -1
+            test_output = test_stdout.decode("utf-8", errors="replace")
+
+        if test_rc != 0:
+            log.error(
+                "self_update[worktree]: tests FAILED (rc=%s) in %s — main repo unchanged",
+                test_rc, worktree_dir,
+            )
+            if jid:
+                _tail = test_output[-800:] if len(test_output) > 800 else test_output
+                await route_fn(jid, (
+                    f"❌ Worktree 測試失敗 (exit {test_rc})。"
+                    f"主 repo 完全未變。Worktree 留在 `{worktree_dir}` 供檢查。\n```\n{_tail}\n```"
+                ))
+            # PR-2 (#570) AI auto-patch will be wired here.  For now: cleanup.
+            try:
+                _cleanup = await asyncio.create_subprocess_exec(
+                    "git", "worktree", "remove", "--force", worktree_dir,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    cwd=main_cwd,
+                    creationflags=_NO_WINDOW,
+                )
+                await asyncio.wait_for(_cleanup.wait(), timeout=20.0)
+            except Exception:
+                pass
+            return
+
+        log.info("self_update[worktree]: tests passed — fast-forwarding main")
+
+        # ── Fast-forward main to FETCH_HEAD ──────────────────────────────────
+        ff = await asyncio.create_subprocess_exec(
+            "git", "merge", "--ff-only", "FETCH_HEAD",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=main_cwd,
+            creationflags=_NO_WINDOW,
+        )
+        ff_out, _ = await asyncio.wait_for(ff.communicate(), timeout=30.0)
+        ff_msg = ff_out.decode("utf-8", errors="replace").strip()
+        if ff.returncode != 0:
+            log.error("self_update[worktree]: ff-merge failed rc=%d: %s", ff.returncode, ff_msg[:300])
+            if jid:
+                await route_fn(jid, f"❌ ff-merge 失敗（main 可能有本地 commit）：\n```\n{ff_msg[:500]}\n```")
+            # Cleanup worktree before giving up.
+            try:
+                _cleanup = await asyncio.create_subprocess_exec(
+                    "git", "worktree", "remove", "--force", worktree_dir,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    cwd=main_cwd,
+                    creationflags=_NO_WINDOW,
+                )
+                await asyncio.wait_for(_cleanup.wait(), timeout=20.0)
+            except Exception:
+                pass
+            return
+
+        # ── Cleanup worktree (no longer needed) ──────────────────────────────
+        try:
+            _cleanup = await asyncio.create_subprocess_exec(
+                "git", "worktree", "remove", "--force", worktree_dir,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                cwd=main_cwd,
+                creationflags=_NO_WINDOW,
+            )
+            await asyncio.wait_for(_cleanup.wait(), timeout=20.0)
+        except Exception:
+            pass
+
+        # ── pip install -e . (optional) ──────────────────────────────────────
+        _pip_marker = _pathlib.Path(main_cwd) / "pyproject.toml"
+        _setup_marker = _pathlib.Path(main_cwd) / "setup.py"
+        if _pip_marker.exists() or _setup_marker.exists():
+            pip_proc = await asyncio.create_subprocess_exec(
+                "pip", "install", "-e", ".", "--quiet",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=main_cwd,
+                creationflags=_NO_WINDOW,
+            )
+            try:
+                await asyncio.wait_for(pip_proc.communicate(), timeout=120.0)
+            except asyncio.TimeoutError:
+                try:
+                    pip_proc.kill()
+                except Exception:
+                    pass
+
+        # ── Write flag → main loop will os.execv ─────────────────────────────
+        flag = config.DATA_DIR / "self_update.flag"
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: flag.write_text(ff_msg[:1000], encoding="utf-8")
+        )
+        log.info("self_update[worktree]: flag written — restart pending")
+        if jid:
+            await route_fn(jid, f"✅ Worktree 測試通過、ff-merge 完成。EvoClaw 即將重啟。\n```\n{ff_msg[:300]}\n```")
+    except Exception as exc:
+        log.error("self_update[worktree]: unexpected error: %s", exc)
+        if jid:
+            await route_fn(jid, f"❌ Worktree 更新失敗：{exc}")
+
+
+async def _run_self_update_inplace(jid: str, route_fn: Callable) -> None:
+    """Legacy in-place self-update (pre-#569).
+
+    Kept as a fallback for `AUTO_UPDATE_USE_WORKTREE=false`.  Has the
+    historical race window where a failed test gate leaves main in
+    pulled-but-broken state until `git reset --hard` finishes.
+    """
     cwd = str(config.BASE_DIR)
     try:
         if jid:
