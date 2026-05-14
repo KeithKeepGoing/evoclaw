@@ -668,6 +668,16 @@ async def run_container_agent(
     # runaway agent can fill the host's overlay storage via the container layer.
     # Mount a dedicated tmpfs so /tmp is memory-backed and size-limited.
     cmd += ["--tmpfs", f"/tmp:size={config.CONTAINER_TMPFS_SIZE},mode=1777"]
+    # ── #538 mitigation C: protect host from OOM-kill in container's favour ──
+    # Set the per-container oom_score_adj to a positive value so the kernel
+    # prefers to kill the container's processes when the host as a whole is
+    # under memory pressure.  This does NOT reduce the agent's own cgroup OOM
+    # rate (its in-cgroup processes still hit CONTAINER_MEMORY first), but
+    # ensures that if memory pressure escalates to the host level the agent
+    # container is sacrificed before the host process.  Value 500 is the
+    # midpoint of the kernel's [-1000, 1000] range — "noticeably more
+    # killable than host processes" without being a forced kill.
+    cmd += ["--oom-score-adj", "500"]
     if uid is not None and gid is not None:
         cmd += ["--user", f"{uid}:{gid}"]
     cmd += [
