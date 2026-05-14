@@ -1,3 +1,18 @@
+## [1.27.30] — 2026-05-14
+
+### Changed
+- **OOM headroom mitigation A (#538): lowered `CONTAINER_TMPFS_SIZE` default `64m → 16m`.** The tmpfs reservation itself counts against the container's cgroup memory budget even when `/tmp` is empty, so the smaller default reclaims ~48 MB of headroom per container with no functional impact for normal agent workloads (entrypoint.sh writes a single ~few-KB `/tmp/input.json`). Operators with workloads that write large `/tmp/*` artifacts can raise the value in `.env`. Existing deployments that already set `CONTAINER_TMPFS_SIZE=64m` in their `.env` keep their current behaviour.
+
+### Added
+- **OOM headroom mitigation C (#538): set `--oom-score-adj=500` on every agent container.** When the host as a whole is under memory pressure, the kernel now prefers to kill the agent container's processes rather than host processes. Does not change the in-cgroup OOM rate (`CONTAINER_MEMORY` still bounds the agent's own budget); only adds a safety net so escalating memory pressure cannot take down the host process.
+
+### Technical Details
+- **Modified Files**: `host/config.py:140` (default lowered + comment updated), `host/container_runner.py:670` (new `--oom-score-adj` flag), `.env.example` (documentation updated).
+- **Image rebuild required**: No (host-side change only — Docker flag goes on `docker run`).
+- **Breaking Changes**: None. Operators with custom `CONTAINER_TMPFS_SIZE` in `.env` see no change; new installs get the lower default.
+- **Mitigation B (#538) note**: the issue listed "Skip `:ro` full-project mount for regular groups" as a candidate. Inspected `host/container_runner.py:315-348` — this is already the case. Non-main groups mount only their own folder + `global/:ro` + sessions + ipc + dynamic_tools; they do not mount the project. No code change needed for B.
+- **Not included here**: mitigations D–H from #538 (graceful degradation, long-lived worker pool, nsjail replacement, dynamic budget). Those are larger architectural moves; A+C are the low-risk first batch.
+
 ## [1.27.29] — 2026-05-11
 
 ### Fixed

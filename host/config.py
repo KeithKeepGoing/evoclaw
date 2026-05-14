@@ -133,11 +133,15 @@ CONTAINER_PIDS_LIMIT: int = _env_int("CONTAINER_PIDS_LIMIT", 256)
 # Format: "<N>m" for megabytes (e.g. "10m").
 CONTAINER_LOG_MAX_SIZE: str = os.environ.get("CONTAINER_LOG_MAX_SIZE", "10m")
 CONTAINER_LOG_MAX_FILES: str = os.environ.get("CONTAINER_LOG_MAX_FILES", "2")
-# CONTAINER_TMPFS_SIZE (BUG-19B-02):
+# CONTAINER_TMPFS_SIZE (BUG-19B-02 + #538 mitigation A):
 # Size of the tmpfs mounted at /tmp inside each container.  Bounds the amount
 # of host memory a container may consume via temporary files (including the
-# /tmp/input.json written by entrypoint.sh).  Default: 64m.
-CONTAINER_TMPFS_SIZE: str = os.environ.get("CONTAINER_TMPFS_SIZE", "64m")
+# /tmp/input.json written by entrypoint.sh).  Default lowered 64m → 16m as
+# part of the OOM headroom recovery (#538): the tmpfs reservation itself
+# counts against the container's cgroup memory budget even when /tmp is
+# empty, so the smaller default reclaims ~48 MB of headroom per container.
+# Raise back to 64m or higher if a workload writes large /tmp/* artifacts.
+CONTAINER_TMPFS_SIZE: str = os.environ.get("CONTAINER_TMPFS_SIZE", "16m")
 # CONTAINER_STOP_GRACE_SECS (BUG-19B-03):
 # Seconds to wait for SIGTERM to cleanly stop a container before Docker issues
 # SIGKILL.  Gives the agent time to flush open file writes and close IPC files
