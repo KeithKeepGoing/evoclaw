@@ -1090,7 +1090,22 @@ async def run_container_agent(
             _mem_mtime = _host_memory_path.stat().st_mtime if _host_memory_path.exists() else 0.0
             if _mem_mtime < t0:
                 _date_str = _dt.datetime.now().strftime("%Y-%m-%d")
-                _prompt_preview = (prompt or "")[:80].replace("\n", " ") if prompt else "(no prompt)"
+                # #583 fix: previously sliced (prompt or "")[:80], which lands inside
+                # the wrapping <context ...><messages><message ...> tags and writes
+                # XML garbage like `<context timezone="UTC" /> <messages> <message
+                # sender="..." time="May 12, 2026,` into MEMORY.md.  Extract the
+                # last <message>...</message> body (the most recent user turn) and
+                # strip nested tags before truncating.
+                _last_msg_match = re.findall(
+                    r"<message[^>]*>(.*?)</message>",
+                    prompt or "",
+                    flags=re.DOTALL,
+                )
+                _last_msg = _last_msg_match[-1] if _last_msg_match else ""
+                _last_msg = re.sub(r"<[^>]+>", "", _last_msg).strip()
+                _prompt_preview = (
+                    _last_msg[:80].replace("\n", " ") if _last_msg else "(no user message)"
+                )
                 _auto_entry = f"\n[{_date_str}] [auto] Task: {_prompt_preview}. Result: success.\n"
                 # p17c BUG-FIX (LOW): open() + write() are blocking syscalls that
                 # can stall the event loop on a slow filesystem (NFS, overlayfs,

@@ -1,3 +1,14 @@
+## [1.27.31] — 2026-05-14
+
+### Fixed
+- **`MEMORY.md` host auto-write fallback no longer writes raw XML prompt prefix (#583).** Previously `host/container_runner.py:1083` sliced `(prompt or "")[:80]` to summarise the just-completed session.  `prompt` is the full serialised XML payload (`<context>...<messages><message ...>...`), so every fallback entry landed inside the opening tags and produced identical-looking garbage such as `[2026-05-12] [auto] Task: <context timezone="UTC" /> <messages> <message sender="Ke Ma" time="May 12, 2026. Result: success.` — dozens of repeats accumulated in long-running groups' `MEMORY.md`.  Fix: extract the last `<message>...</message>` body via regex, strip nested tags, then truncate.  Existing polluted entries are not auto-scrubbed (separate clean-up script tracked outside this PR).
+
+### Technical Details
+- **Modified Files**: `host/container_runner.py` (auto-write fallback block, ~line 1090).
+- **Image rebuild required**: No (host-side change only).
+- **Breaking Changes**: None.  Output shape (`[YYYY-MM-DD] [auto] Task: <text>. Result: success.`) unchanged — only the `<text>` source is fixed.
+- **Test coverage**: no new test added; the regex is exercised once per successful container run.  A follow-up unit test for `_prompt_preview` extraction is welcome.
+
 ## [1.27.30] — 2026-05-14
 
 ### Changed
