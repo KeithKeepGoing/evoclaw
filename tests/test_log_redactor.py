@@ -98,3 +98,61 @@ class TestSecretUrlRedactor:
         filt.filter(rec)
         assert "1:abc" not in rec.args["url"]
         assert "***REDACTED***" in rec.args["url"]
+
+
+class TestFilterPlacement:
+    """Regression test for #590 follow-up.
+
+    Filters attached to a *logger* only see records logged through that logger
+    directly — records propagated from child loggers are NOT filtered.  Filters
+    attached to a *handler* see every record the handler emits, including
+    propagated ones.  EvoClaw needs the handler placement so it can catch
+    httpx / urllib3 / discord.gateway URL logs that the host code does not
+    own.  This test pins the correct placement.
+    """
+
+    def test_handler_filter_catches_child_logger_records(self):
+        import io
+
+        buf = io.StringIO()
+        handler = logging.StreamHandler(buf)
+        handler.setFormatter(logging.Formatter("%(name)s - %(message)s"))
+        handler.addFilter(SecretUrlRedactor())  # the CORRECT placement
+
+        root = logging.getLogger("test_filter_placement_root")
+        for h in list(root.handlers):
+            root.removeHandler(h)
+        root.setLevel(logging.INFO)
+        root.addHandler(handler)
+
+        child = root.getChild("httpx")
+        child.info("POST https://api.telegram.org/bot1:abcdef/getMe done")
+        child.info("POST https://discord.com/api/webhooks/9/secrettoken")
+
+        captured = buf.getvalue()
+        assert "1:abcdef" not in captured
+        assert "secrettoken" not in captured
+        assert captured.count("***REDACTED***") == 2
+
+    def test_logger_filter_does_NOT_catch_child_logger_records(self):
+        """Pin the broken behaviour so a future refactor cannot silently move
+        the filter back onto the logger and re-leak tokens."""
+        import io
+
+        buf = io.StringIO()
+        handler = logging.StreamHandler(buf)
+        handler.setFormatter(logging.Formatter("%(name)s - %(message)s"))
+
+        root = logging.getLogger("test_filter_placement_root_broken")
+        for h in list(root.handlers):
+            root.removeHandler(h)
+        root.setLevel(logging.INFO)
+        root.addHandler(handler)
+        root.addFilter(SecretUrlRedactor())  # the WRONG placement
+
+        child = root.getChild("httpx")
+        child.info("POST https://api.telegram.org/bot1:abcdef/getMe done")
+
+        captured = buf.getvalue()
+        # Token leaks — child propagation bypasses parent-logger filters.
+        assert "1:abcdef" in captured
