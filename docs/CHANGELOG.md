@@ -1,3 +1,14 @@
+## [1.27.35] — 2026-05-15
+
+### Security
+- **#590 follow-up: move `SecretUrlRedactor` from root-logger filter to handler filter.** Initial wiring at `host/main.py:_setup_logging()` attached the filter to the root *logger* via `root.addFilter(...)`. Live verification after `pm2 restart` showed Telegram bot tokens **still leaking** into `pm2-err.log` after the restart — `httpx` records propagated to root were emitted untouched. Per Python's logging model, logger-attached filters only see records logged through that logger directly; records propagated from child loggers (`httpx`, `urllib3`, `discord.gateway`, ...) bypass parent-logger filters. Fix: attach the filter to the *handler* via `handler.addFilter(...)`. Handler filters apply to every record the handler emits, including propagated. Added two regression tests in `tests/test_log_redactor.py::TestFilterPlacement` — one that pins the correct (handler) placement, one that pins the broken (logger) placement so a future refactor can't silently re-introduce the leak.
+
+### Technical Details
+- **Modified Files**: `host/main.py:_setup_logging()` (one line moved, comment expanded), `tests/test_log_redactor.py` (two new tests, 13 total).
+- **Image rebuild required**: No (host-side change only).
+- **Verification**: standalone `python -c "..."` script (in PR body) confirms child-logger records now redacted via the handler filter.
+- **Breaking Changes**: None.
+
 ## [1.27.34] — 2026-05-15
 
 ### Security

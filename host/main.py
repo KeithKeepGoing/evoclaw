@@ -228,15 +228,20 @@ def _setup_logging() -> None:
             datefmt="%Y-%m-%d %H:%M:%S",
         ))
 
+    # Install secret-URL redactor on the HANDLER (#590 follow-up).  Filters
+    # attached to a Logger only filter records logged through that logger
+    # directly — records propagated from child loggers (httpx, urllib3,
+    # discord.gateway, ...) are NOT filtered by parent-logger filters per
+    # Python's logging model.  Filters on a Handler are applied to every
+    # record the handler emits, including propagated ones — which is the
+    # behaviour we need.
+    handler.addFilter(SecretUrlRedactor())
+
     root = logging.getLogger()
     root.setLevel(level)
     # Remove any existing handlers to avoid duplicate output
     root.handlers.clear()
     root.addHandler(handler)
-    # Install secret-URL redactor on the root logger (#590).  The filter
-    # mutates msg/args in place so every handler — and every child logger
-    # that propagates to root — sees the redacted text.
-    root.addFilter(SecretUrlRedactor())
 
 
 _setup_logging()
