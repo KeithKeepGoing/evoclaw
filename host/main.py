@@ -1953,26 +1953,36 @@ async def main() -> None:
 
     log.info("EvoClaw shut down cleanly.")
 
-    # Self-update: replace current process with a fresh one so updated code is loaded.
+    # Self-update: restart so updated code is loaded.  The restart mechanism
+    # is platform-specific (Issue #530 + Windows follow-up verified 2026-05-19).
     #
-    # Design note (Issue #530): we intentionally use `os.execv` here rather than
-    # shelling out to `pm2 restart evoclaw`.  Rationale:
-    #   * os.execv keeps the pm2 supervisor PID stable — pm2 sees a single
-    #     long-lived worker, not a parent that exited.  Restart counters and
-    #     uptime stats stay sensible.
-    #   * `pm2 restart` would require pm2 to be on PATH and the pm2 daemon to
-    #     be running inside this environment; in edge cases (e.g. pm2 daemon
-    #     crashed, or EvoClaw launched directly for debugging) that call
-    #     would hang or fail and the update would get stuck.
-    #   * pm2's `autorestart: true` is still our crash safety net: if os.execv
-    #     itself fails or the replacement process crashes at startup, pm2
-    #     will respawn us.
-    # If you are tempted to "fix" this by switching to pm2 restart, read the
-    # issue #530 discussion first.
+    # POSIX — os.execv:
+    #   A true in-place image replacement.  Same PID, so the pm2 supervisor
+    #   sees one stable long-lived worker; restart counters / uptime stay
+    #   sensible.  No dependency on pm2 being on PATH.
+    #
+    # Windows — clean exit, let pm2 respawn:
+    #   Windows has no real exec() syscall.  CPython's os.execv on Windows is
+    #   CreateProcess + exit the current process, so it produces a NEW PID and
+    #   a brief window where two processes coexist.  Verified empirically
+    #   2026-05-19: parent pid 58992 → execv child pid 107324 (ppid 58992).
+    #   That child races pm2's own `autorestart` respawn — two EvoClaw
+    #   instances can briefly both try to bind the dashboard / SDK / WS ports
+    #   (8765 / 8767 / 8768).  So on Windows we do NOT execv: we exit cleanly
+    #   and rely on pm2 `autorestart: true` to respawn exactly one process.
+    #   If EvoClaw was launched standalone for debugging (no pm2), it simply
+    #   exits — acceptable, the developer restarts manually.
+    #
+    # The restart flag has already been unlink()'d at detection time, so a
+    # clean exit cannot cause a restart loop.
     if _self_update_requested:
         import sys as _sys_restart
-        log.info("Restarting EvoClaw for self-update via os.execv()...")
-        os.execv(_sys_restart.executable, [_sys_restart.executable] + _sys_restart.argv)
+        if _sys_restart.platform == "win32":
+            log.info("Restarting EvoClaw for self-update via clean exit (Windows; pm2 autorestart respawns)...")
+            _sys_restart.exit(0)
+        else:
+            log.info("Restarting EvoClaw for self-update via os.execv() (POSIX in-place)...")
+            os.execv(_sys_restart.executable, [_sys_restart.executable] + _sys_restart.argv)
 
 
 

@@ -1,3 +1,14 @@
+## [1.27.41] — 2026-05-19
+
+### Fixed
+- **Self-update restart on Windows no longer uses `os.execv` — exits cleanly for pm2 to respawn.** The `host/main.py` restart block assumed `os.execv` is a true in-place image replacement (same PID), which is the #530 design rationale.  **That holds only on POSIX.** Windows has no real `exec()` syscall — CPython's `os.execv` on Windows is `CreateProcess` + exit, producing a *new* PID and a brief two-process window.  Verified empirically 2026-05-19: parent pid 58992 → execv child pid 107324.  On the Windows host that child races pm2's own `autorestart` respawn and both can try to bind the dashboard / SDK / WS ports (8765 / 8767 / 8768).  Fix: platform-branch the restart — POSIX keeps `os.execv`; Windows does a clean `sys.exit(0)` and lets pm2 `autorestart: true` respawn exactly one process.  The restart flag is already `unlink()`'d at detection so a clean exit cannot loop.
+
+### Technical Details
+- **Modified Files**: `host/main.py` (restart block, platform branch + expanded design comment), `docs/SELF_UPDATE.md` §1 (rewritten as platform-specific).
+- **Image rebuild required**: No (host-side change only — `pm2 restart evoclaw` to apply).
+- **Breaking Changes**: None on POSIX.  On Windows the self-update restart now depends on pm2 (or another supervisor with autorestart); a standalone-launched debug process will exit instead of restarting — acceptable for debugging.
+- **Verification**: empirical `os.execv` PID test on this Windows host (`D:/tmp/execv_pid_test2.py`) confirmed the new-PID behaviour before the fix was written.
+
 ## [1.27.40] — 2026-05-15
 
 ### Added
