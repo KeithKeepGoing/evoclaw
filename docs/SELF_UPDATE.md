@@ -4,19 +4,31 @@
 
 本文件集中說明 EvoClaw 如何拉取新程式碼、測試、重啟。原本散在 `host/auto_update.py`、`host/ipc_watcher.py`、`host/main.py` 的 code comment 與多個 CHANGELOG 條目；此文件是單一權威來源。
 
-## 1. 核心設計：os.execv，不是 pm2 restart
+## 1. 核心設計：重啟機制依平台分流
 
-所有自動更新/重啟路徑最終都呼叫 **`os.execv`**（`host/main.py` 結尾），原地替換 process image。
+所有自動更新/重啟路徑最終都進 `host/main.py` 結尾的重啟區塊。重啟機制**依作業系統不同**（Issue #530 + 2026-05-19 Windows 驗證後）：
 
-設計理由（Issue #530，code comment 於 `host/main.py`）：
+### POSIX（Linux / macOS）— `os.execv`
 
-- **os.execv 保 pm2 supervisor PID 穩定** — pm2 看到單一長駐 worker，restart counter 與 uptime 統計合理。
-- **不假設 pm2 在 PATH 上** — EvoClaw 可能直接被啟動 debug，或 pm2 daemon 已 crash。`pm2 restart` 在這些情境會 hang 或失敗，更新卡住。
-- **pm2 `autorestart: true` 仍是 crash safety net** — 若 os.execv 本身失敗或替換後 process 啟動即 crash，pm2 會 respawn。
+真正的原地 image 替換。**同 PID**，pm2 supervisor 看到單一長駐 worker，restart counter / uptime 統計合理。不依賴 pm2 在 PATH 上。
 
-⚠️ 若想「改成 pm2 restart」，先讀 Issue #530 討論。
+### Windows — clean exit，讓 pm2 respawn
 
-`pm2 restart evoclaw`（手動）是**另一回事** — 殺 process 重起、新 PID。只用於手動 host-only 部署，見 §6。
+Windows **沒有真正的 `exec()` syscall**。CPython 在 Windows 上的 `os.execv` = `CreateProcess` + 終止當前 process → **新 PID** + 短暫雙 process 並存視窗。
+
+2026-05-19 實測確認：parent pid 58992 → execv child pid 107324（child ppid=58992）。
+
+該 child 會與 pm2 自己的 `autorestart` respawn **競爭** — 兩個 EvoClaw 實例可能同時搶綁 dashboard / SDK / WS ports（8765 / 8767 / 8768）。所以 Windows 上**不走 execv**：clean `sys.exit(0)`，靠 pm2 `autorestart: true` respawn 恰好一個 process。
+
+若 EvoClaw 是 standalone 啟動 debug（無 pm2），就單純 exit — 可接受，開發者手動重啟。
+
+### 共通
+
+- 重啟 flag 在偵測當下即 `unlink`（`host/main.py:1166` / `:1181`），所以 clean exit 不會造成 restart loop。
+- `pm2 autorestart: true` 是 crash safety net（兩平台皆然）。
+- `restart_notify.json`（#579）是 DATA_DIR 內檔案，跨 exit/respawn 存活，新 process 啟動時讀取 → post-restart 通知兩平台都正常。
+
+⚠️ `pm2 restart evoclaw`（operator 手動下指令）是**另一回事** — 殺 process 重起、新 PID。只用於手動 host-only 部署，見 §7。
 
 ## 2. 四種觸發路徑
 
@@ -86,7 +98,7 @@
 | `<DATA_DIR>/self_update.flag` | 拉 code 後重啟 | `_run_self_update_worktree` / `_inplace` |
 | `<DATA_DIR>/restart.flag` | **不拉 code**，只重啟（reload `.env`、解卡死 channel、套用新 agent image） | `mcp__evoclaw__restart_host` IPC handler |
 
-兩者都被 `host/main.py` 的 main loop 偵測，都設 `_self_update_requested=True`，走同一條 os.execv 路徑 — lifecycle 相同，pm2 看到一個穩定 PID。
+兩者都被 `host/main.py` 的 main loop 偵測，都設 `_self_update_requested=True`，走 §1 的平台分流重啟路徑 — lifecycle 相同。
 
 `<DATA_DIR>/restart_notify.json`（Issue #579）— 在寫 flag 的同時寫入，記 originating chat jid + source label + 起始 timestamp。重啟後 main loop 讀取並 unlink，回送 `✅ EvoClaw 已重啟完成（耗時 Ns）` 給原 chat。Best-effort，失敗不擋重啟。
 
