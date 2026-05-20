@@ -1,170 +1,273 @@
-# EvoClaw Self-Update & Restart
+# EvoClaw Self-Update and Restart
 
-更新日期: 2026-05-15
+Last updated: 2026-05-19
 
-本文件集中說明 EvoClaw 如何拉取新程式碼、測試、重啟。原本散在 `host/auto_update.py`、`host/ipc_watcher.py`、`host/main.py` 的 code comment 與多個 CHANGELOG 條目；此文件是單一權威來源。
+This document captures the current self-update and restart design for EvoClaw. It consolidates the intended behavior across `host/auto_update.py`, `host/ipc_watcher.py`, `host/main.py`, related slash commands, and the supporting changelog / issue history.
 
-## 1. 核心設計：重啟機制依平台分流
+## 1. Restart policy: `os.execv`, not `pm2 restart`
 
-所有自動更新/重啟路徑最終都進 `host/main.py` 結尾的重啟區塊。重啟機制**依作業系統不同**（Issue #530 + 2026-05-19 Windows 驗證後）：
+The canonical in-process restart path is `os.execv(...)` from `host/main.py`.
 
-### POSIX（Linux / macOS）— `os.execv`
+Why:
 
-真正的原地 image 替換。**同 PID**，pm2 supervisor 看到單一長駐 worker，restart counter / uptime 統計合理。不依賴 pm2 在 PATH 上。
+- `os.execv` keeps the same supervised process slot under pm2 instead of creating a separate operator-driven restart flow.
+- It avoids depending on pm2 CLI availability or PATH correctness from inside EvoClaw.
+- It preserves pm2 as the crash safety net via `autorestart: true`, while keeping the normal restart path inside the host process lifecycle.
 
-### Windows — clean exit，讓 pm2 respawn
+`pm2 restart evoclaw` is still valid for manual operator use, but it is not the primary programmatic restart mechanism.
 
-Windows **沒有真正的 `exec()` syscall**。CPython 在 Windows 上的 `os.execv` = `CreateProcess` + 終止當前 process → **新 PID** + 短暫雙 process 並存視窗。
+Relevant history:
 
-2026-05-19 實測確認：parent pid 58992 → execv child pid 107324（child ppid=58992）。
+- Issue `#530`: self-update architecture and restart policy
+- Issue `#573`: `restart_host` tool and restart flag flow
 
-該 child 會與 pm2 自己的 `autorestart` respawn **競爭** — 兩個 EvoClaw 實例可能同時搶綁 dashboard / SDK / WS ports（8765 / 8767 / 8768）。所以 Windows 上**不走 execv**：clean `sys.exit(0)`，靠 pm2 `autorestart: true` respawn 恰好一個 process。
+## 2. Update entry points
 
-若 EvoClaw 是 standalone 啟動 debug（無 pm2），就單純 exit — 可接受，開發者手動重啟。
+EvoClaw can request update / restart from multiple sources:
 
-### 共通
-
-- 重啟 flag 在偵測當下即 `unlink`（`host/main.py:1166` / `:1181`），所以 clean exit 不會造成 restart loop。
-- `pm2 autorestart: true` 是 crash safety net（兩平台皆然）。
-- `restart_notify.json`（#579）是 DATA_DIR 內檔案，跨 exit/respawn 存活，新 process 啟動時讀取 → post-restart 通知兩平台都正常。
-
-⚠️ `pm2 restart evoclaw`（operator 手動下指令）是**另一回事** — 殺 process 重起、新 PID。只用於手動 host-only 部署，見 §7。
-
-## 2. 四種觸發路徑
-
-| 路徑 | 觸發方式 | Gate | 是否拉 code |
-|---|---|---|---|
-| `/update` slash command | Telegram owner 打字 | `OWNER_IDS`（平台驗證的 user id） | 是 |
-| `auto_update_loop` | 排程每 `AUTO_UPDATE_INTERVAL_SECS` 秒 `git fetch` | `AUTO_UPDATE_ENABLED=true` | 是（behind 時） |
-| `mcp__evoclaw__self_update` IPC | agent 呼叫工具 | `SELF_UPDATE_TOKEN`（legacy 自然語言路徑） | 是 |
-| `mcp__evoclaw__restart_host` IPC | agent 呼叫工具 / `/restart` slash | `OWNER_IDS`（slash 路徑） | **否** — 只重啟 |
-
-關於 `/update` vs 自然語言「請更新」的差異見 §5。
-
-## 3. 自動更新流程（worktree 沙盒，Issue #569）
-
-`/update`、`auto_update_loop`、`self_update` IPC 最終都進 `host/ipc_watcher.py:_run_self_update` → `_run_self_update_worktree`：
-
-```
-1. git worktree prune                      清掉死 worktree 記錄
-2. 移除上次殘留的 worktree（若存在）
-3. git fetch origin <AUTO_UPDATE_BRANCH>
-4. git rev-list --count HEAD..FETCH_HEAD    已是最新 → 結束（不重啟）
-5. git worktree add --detach <WORKTREE_DIR> FETCH_HEAD   隔離 checkout
-6. 在 worktree 內跑 AUTO_UPDATE_TEST_CMD（預設 pytest）
-7a. test 過 → git merge --ff-only FETCH_HEAD（主 repo）
-              → 寫 self_update.flag
-              → 寫 restart_notify.json（Issue #579）
-              → main loop 偵測 flag → os.execv 重啟
-7b. test 失敗 → git worktree remove --force
-               → 主 repo 完全不動（無 race，無需 reset --hard）
-               → 若 AUTO_UPDATE_AI_FIX_ENABLED，進 §4 AI patch
-```
-
-關鍵不變量：**測試在 worktree 沙盒跑，失敗時主 repo 一行都沒動**。這取代了 #569 之前的 `git pull` + `git reset --hard` rollback（race-prone）。
-
-相關設定（`.env`）：
-
-- `AUTO_UPDATE_ENABLED` — 是否開排程更新迴圈（預設 false）
-- `AUTO_UPDATE_INTERVAL_SECS` — fetch 間隔（最小 60）
-- `AUTO_UPDATE_BRANCH` — 追蹤的分支（預設 main）
-- `AUTO_UPDATE_TEST_CMD` — test gate 指令（預設 `pytest -x --timeout=60 -q tests/`）
-- `AUTO_UPDATE_USE_WORKTREE` — true 走沙盒（預設），false 走 legacy in-place
-- `AUTO_UPDATE_WORKTREE_DIR` — 沙盒路徑（預設 `$DATA_DIR/auto_update_worktree`）
-
-## 4. AI 自動修補（Issue #570）
-
-當 worktree test gate 失敗且 `AUTO_UPDATE_AI_FIX_ENABLED=true`：
-
-```
-1. 收集失敗 test 輸出
-2. 呼叫 LLM 產生 unified diff 嘗試修復
-3. 在 worktree 內 apply patch，重跑 test
-4. 成功 →
-     AUTO_UPDATE_AI_FIX_REQUIRE_HUMAN_APPROVE=true（預設） → 開 PR 等人審
-     false → ff-merge 進 main
-5. 達 AUTO_UPDATE_AI_FIX_MAX_RETRIES（預設 3）仍失敗 → 放棄、主 repo 不動
-```
-
-安全限制（`host/self_update_ai_fix.py`）：
-
-- `tests/` 受 hash 保護 — 修改測試的 patch 一律拒絕
-- patch 只能動 `host/`、`container/agent-runner/`、`scripts/`、`docs/`
-
-## 5. 兩個 flag 的語義
-
-| Flag 檔 | 作用 | 誰寫 |
+| Entry point | Purpose | Gate |
 |---|---|---|
-| `<DATA_DIR>/self_update.flag` | 拉 code 後重啟 | `_run_self_update_worktree` / `_inplace` |
-| `<DATA_DIR>/restart.flag` | **不拉 code**，只重啟（reload `.env`、解卡死 channel、套用新 agent image） | `mcp__evoclaw__restart_host` IPC handler |
+| `/update` slash command | Owner-triggered interactive update | `OWNER_IDS` |
+| `auto_update_loop` | Scheduled `git fetch` + update check | `AUTO_UPDATE_ENABLED=true` |
+| `mcp__evoclaw__self_update` IPC | Agent-triggered self-update | `SELF_UPDATE_TOKEN` |
+| `mcp__evoclaw__restart_host` IPC | Agent-triggered restart or `/restart` backend | owner / trusted gate |
 
-兩者都被 `host/main.py` 的 main loop 偵測，都設 `_self_update_requested=True`，走 §1 的平台分流重啟路徑 — lifecycle 相同。
+Operationally:
 
-`<DATA_DIR>/restart_notify.json`（Issue #579）— 在寫 flag 的同時寫入，記 originating chat jid + source label + 起始 timestamp。重啟後 main loop 讀取並 unlink，回送 `✅ EvoClaw 已重啟完成（耗時 Ns）` 給原 chat。Best-effort，失敗不擋重啟。
+- `/update` is the preferred human-operated path.
+- Legacy token-gated IPC self-update still exists for compatibility.
+- `/restart` and `restart_host` are restart-only; they do not implicitly update code.
 
-## 6. `/update` vs 自然語言「請更新」
+Relevant history:
 
-- `/update` slash command（Issue #577）— **繞過 agent loop**。`OWNER_IDS` gate。0 LLM 呼叫、0 token gate、立即執行。**routine ops 用這個**。
-- 自然語言「請更新後台」— 走 agent → legacy `tool_self_update` IPC → 需 `SELF_UPDATE_TOKEN`。未設 token 時 host 回 `❌ self_update 已停用`。
+- Issue `#577`: `/update` and `/restart` slash commands
+- Issue `#584`: legacy self-update flow bug / loop risk
 
-Issue #584 修過一個相關 bug：legacy 路徑被拒後，agent 曾幻覺出「已重啟 / 更新已觸發」假訊息。`container/agent-runner/soul.md` 的 `IPC enqueue ≠ 成功` 段現禁止此行為。詳見 #584。
+## 3. Worktree-based update flow
 
-## 7. 手動部署流程（路徑 4 之外的 plain 手動）
+Self-update should run through a detached git worktree instead of mutating the main checkout first.
 
-非透過 EvoClaw 自身、而是 operator 直接操作時：
+Primary implementation area:
 
-**Host-only 改**（`host/*.py`、`scripts/*`、`docs/*`、`.env.example`、`.github/*`）：
-```
+- `host/ipc_watcher.py:_run_self_update`
+- `host/ipc_watcher.py:_run_self_update_worktree`
+
+Expected flow:
+
+1. `git worktree prune`
+2. Clean up stale temporary worktree state if needed
+3. `git fetch origin <AUTO_UPDATE_BRANCH>`
+4. Check whether `FETCH_HEAD` is ahead of local `HEAD`
+5. `git worktree add --detach <WORKTREE_DIR> FETCH_HEAD`
+6. Run `AUTO_UPDATE_TEST_CMD` inside the worktree
+7. If tests pass:
+   - `git merge --ff-only FETCH_HEAD`
+   - write `<DATA_DIR>/self_update.flag`
+   - optionally write `<DATA_DIR>/restart_notify.json`
+   - let the main loop perform `os.execv`
+8. If tests fail:
+   - remove the temporary worktree
+   - do not mutate the main checkout
+   - optionally enter AI patch flow if enabled
+
+Why worktree mode exists:
+
+- It prevents failed update attempts from polluting the live checkout.
+- It avoids risky in-place rollback patterns like `git pull` followed by `reset --hard`.
+- It gives update testing an isolated, disposable workspace.
+
+Relevant history:
+
+- Issue `#569`: worktree-based safe update flow
+
+## 4. AI auto-fix flow
+
+If the worktree test gate fails and `AUTO_UPDATE_AI_FIX_ENABLED=true`, EvoClaw may attempt an AI-generated patch flow.
+
+Expected behavior:
+
+1. Detect failed test output in the temporary worktree
+2. Ask the configured LLM for a unified diff patch
+3. Apply the patch inside the worktree
+4. Re-run the test command
+5. If the patch succeeds:
+   - either require human approval, or
+   - fast-forward merge directly if policy allows
+6. If retries are exhausted:
+   - discard the worktree
+   - leave the live checkout untouched
+
+Guardrails:
+
+- Limit writable scope to intended paths such as `host/`, `container/agent-runner/`, `scripts/`, and `docs/`
+- Keep retry count bounded with `AUTO_UPDATE_AI_FIX_MAX_RETRIES`
+- Optionally require human approval with `AUTO_UPDATE_AI_FIX_REQUIRE_HUMAN_APPROVE=true`
+
+Primary implementation area:
+
+- `host/self_update_ai_fix.py`
+
+Relevant history:
+
+- Issue `#570`: AI-assisted fix flow after failed update tests
+
+## 5. Runtime flags and notification files
+
+EvoClaw uses small files in `DATA_DIR` to communicate restart / update intent across loops.
+
+| File | Meaning | Writer |
+|---|---|---|
+| `<DATA_DIR>/self_update.flag` | New code has been merged and host should restart into it | self-update flow |
+| `<DATA_DIR>/restart.flag` | Restart requested without code update | restart IPC / slash flow |
+| `<DATA_DIR>/restart_notify.json` | Best-effort post-restart notification context | self-update / restart flow |
+
+Design notes:
+
+- `host/main.py` should watch these flags inside the main loop.
+- Once the loop observes a restart or self-update request, it should move into the `os.execv` path.
+- `restart_notify.json` may include source label, timestamp, and originating chat / JID so EvoClaw can send a post-restart confirmation.
+
+Relevant history:
+
+- Issue `#579`: post-restart notify back to originating chat
+
+## 6. `/update` vs legacy self-update IPC
+
+Preferred path:
+
+- `/update` slash command
+
+Why:
+
+- It is operator-driven
+- It uses explicit owner gating
+- It avoids prompting an agent to decide whether it should update itself
+- It is less likely to feed update logic back into the agent loop
+
+Legacy path:
+
+- `mcp__evoclaw__self_update`
+
+Why it still exists:
+
+- Backward compatibility
+- Some older flows still reference token-gated self-update behavior
+
+Risk called out in prior work:
+
+- Legacy self-update can interact badly with agent-loop behavior if the agent keeps re-enqueueing update-oriented actions
+- This is part of the motivation for keeping `/update` as the primary operator path
+
+Relevant history:
+
+- Issue `#584`: legacy self-update behavior and loop hazard
+
+## 7. Manual operator flows
+
+For plain operator maintenance, use simple explicit commands.
+
+Host-only changes:
+
+Files such as:
+
+- `host/*.py`
+- `scripts/*`
+- `docs/*`
+- `.env.example`
+- `.github/*`
+
+Commands:
+
+```bash
 git pull
 pm2 restart evoclaw
 ```
-這是真正的 pm2 動作 — 殺 process、新 PID。
 
-**Agent image 改**（`container/agent-runner/*`、`container/Dockerfile`）：
-```
+If agent image code changed:
+
+Files such as:
+
+- `container/agent-runner/*`
+- `container/Dockerfile`
+
+Commands:
+
+```bash
 git pull
 docker build -t evoclaw-agent:latest container/
 pm2 restart evoclaw
 ```
 
-## 8. 已知缺口：self-update 不 rebuild agent image
+This split matters because host self-update only changes the host process. Container runtime code is baked into `evoclaw-agent:latest` and does not change until the image is rebuilt.
 
-⚠️ **重要**：§2 的四種自動路徑、以及 `/update` slash command，**都不會 rebuild `evoclaw-agent:latest` image**。
+## 8. Self-update does not automatically rebuild the agent image
 
-- self_update 只做 `git merge` + os.execv 重啟 **host process**。
-- agent container 是從 `evoclaw-agent:latest` image spawn 的；image 是 build 時 `COPY` 進去的 `container/agent-runner/*.py` 與 `soul.md`。
-- 因此若一次更新含 `container/agent-runner/` 變更，host code 會生效但 **agent 仍跑舊 image**，直到有人手動 `docker build`。
+Important rule:
 
-目前緩解：依賴 operator 看 CHANGELOG 的「Image rebuild required: YES」標記後手動 build。
+- Updating the repo and restarting the host does not by itself refresh code under `container/`
 
-未來改善候選（尚未實作）：
+Implication:
 
-- self_update 偵測 `container/` 是否有 diff → 自動觸發 `docker build`
-- 或把 image build 納入 worktree test gate 之後的步驟
+- If the diff touches `container/agent-runner/` or `container/Dockerfile`, operators must rebuild `evoclaw-agent:latest`
 
-在實作之前，**含 `container/` 變更的更新一律需要手動 `docker build -t evoclaw-agent:latest container/`**。
+Recommended changelog convention:
 
-## 9. 相關 Issue / PR 索引
+- Mark releases with `Image rebuild required: Yes` whenever `container/` changes are part of the rollout
 
-| Issue/PR | 內容 |
+Future improvement ideas:
+
+- Detect whether the update diff includes `container/`
+- Surface a stronger operator warning
+- Optionally include image-build verification in the worktree gate
+
+## 9. Config reference
+
+Common `.env` flags related to self-update:
+
+| Variable | Purpose | Typical default |
+|---|---|---|
+| `AUTO_UPDATE_ENABLED` | Enable scheduled update checks | `false` |
+| `AUTO_UPDATE_INTERVAL_SECS` | Polling interval for update checks | `60` |
+| `AUTO_UPDATE_BRANCH` | Branch to track for updates | `main` |
+| `AUTO_UPDATE_TEST_CMD` | Test gate command run in worktree | `pytest -x --timeout=60 -q tests/` |
+| `AUTO_UPDATE_USE_WORKTREE` | Use isolated worktree flow | `true` |
+| `AUTO_UPDATE_WORKTREE_DIR` | Temporary worktree location | `$DATA_DIR/auto_update_worktree` |
+| `AUTO_UPDATE_AI_FIX_ENABLED` | Enable AI patch flow after failed tests | `false` |
+| `AUTO_UPDATE_AI_FIX_REQUIRE_HUMAN_APPROVE` | Require manual approval before merge | `true` |
+| `AUTO_UPDATE_AI_FIX_MAX_RETRIES` | Max AI repair attempts | `3` |
+| `SELF_UPDATE_TOKEN` | Legacy token for self-update IPC | unset unless needed |
+
+## 10. Related issues and implementation map
+
+Key issues:
+
+| Issue | Summary |
 |---|---|
-| #530 | self_update 基礎 + os.execv 設計 + auto_update 排程 |
-| #569 | worktree 沙盒測試（取代 in-place pull + reset --hard） |
-| #570 | AI 自動修補 worktree test 失敗 |
-| #573 | `restart_host` tool — 純 os.execv 不拉 code |
-| #575 | auto_update 記錄 git fetch stderr |
-| #577 | `/update` `/restart` slash command（繞過 agent loop） |
-| #579 | post-restart notify 回 originating chat |
-| #584 | 修 legacy self_update 路徑幻覺成功訊息 |
+| `#530` | self-update architecture, auto-update loop, restart policy |
+| `#569` | safe worktree-based update flow |
+| `#570` | AI-assisted fix flow |
+| `#573` | restart-host tool and restart flag handling |
+| `#575` | auto-update fetch stderr / reliability |
+| `#577` | `/update` and `/restart` slash commands |
+| `#579` | post-restart notification |
+| `#584` | legacy self-update loop / failure mode |
 
-## 10. 相關程式位置
+Main code locations:
 
-| 檔案 | 角色 |
+| File | Responsibility |
 |---|---|
-| `host/auto_update.py` | `auto_update_loop` 排程 fetch |
-| `host/ipc_watcher.py:_run_self_update` | worktree test gate + flag 寫入 |
-| `host/ipc_watcher.py:_write_restart_notify` | restart_notify.json |
-| `host/main.py`（main loop） | flag 偵測 → `_self_update_requested` |
-| `host/main.py`（結尾） | os.execv 區塊 + 設計理由註解 |
-| `host/self_update_ai_fix.py` | AI patch 流程 |
-| `host/channels/telegram_channel.py` | `/update` `/restart` slash handler |
+| `host/auto_update.py` | scheduled update check loop |
+| `host/ipc_watcher.py` | self-update execution, worktree flow, restart notify write |
+| `host/main.py` | main loop flag handling and `os.execv` restart path |
+| `host/self_update_ai_fix.py` | AI patch generation / retry flow |
+| `host/channels/telegram_channel.py` | `/update` and `/restart` handlers |
+
+## 11. Current operational stance
+
+Current preferred model:
+
+- Human-triggered updates should usually go through `/update`
+- Automatic updates should use worktree gating
+- Restart should be performed by `os.execv` from inside the host process
+- Container changes require explicit `docker build`
+- pm2 remains the supervisor and crash recovery layer, not the primary programmatic restart primitive
